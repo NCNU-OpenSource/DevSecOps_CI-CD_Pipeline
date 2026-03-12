@@ -30,7 +30,11 @@ interface DialogTriggerProps {
 }
 
 const DialogTrigger = ({ children, asChild }: DialogTriggerProps) => {
-  return <BaseDialog.Trigger asChild={asChild}>{children}</BaseDialog.Trigger>;
+  return (
+    <BaseDialog.Trigger {...({ asChild } as any)}>
+      {children}
+    </BaseDialog.Trigger>
+  );
 };
 
 // Dialog Backdrop
@@ -148,7 +152,7 @@ const DialogClose = React.forwardRef<HTMLButtonElement, DialogCloseProps>(
     return (
       <BaseDialog.Close
         ref={ref}
-        asChild={asChild}
+        {...({ asChild } as any)}
         className={cn(
           !asChild &&
             "absolute right-4 top-4 rounded-sm opacity-70 ring-offset-white transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-gray-950 focus:ring-offset-2 disabled:pointer-events-none",

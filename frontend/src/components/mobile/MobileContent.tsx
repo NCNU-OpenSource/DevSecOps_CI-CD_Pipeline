@@ -12,11 +12,7 @@ import { api } from "@/services/api";
 import { formatTime } from "@/utils/format";
 import type { Track } from "@/types";
 
-interface MobileContentProps {
-  onSearchClick?: () => void;
-}
-
-export const MobileContent = ({ onSearchClick }: MobileContentProps) => {
+export const MobileContent = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [query, setQuery] = useState("");

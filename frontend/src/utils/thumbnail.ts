@@ -1,18 +1,21 @@
 /**
  * YouTube 縮略圖解析度級別
  */
-export enum ThumbnailQuality {
+export const ThumbnailQuality = {
   /** 120x90 */
-  DEFAULT = "default",
+  DEFAULT: "default",
   /** 320x180 */
-  MEDIUM = "mqdefault",
+  MEDIUM: "mqdefault",
   /** 480x360 */
-  HIGH = "hqdefault",
+  HIGH: "hqdefault",
   /** 640x480 */
-  STANDARD = "sddefault",
+  STANDARD: "sddefault",
   /** 1280x720 (可能不可用) */
-  MAXRES = "maxresdefault",
-}
+  MAXRES: "maxresdefault",
+} as const;
+
+export type ThumbnailQuality =
+  (typeof ThumbnailQuality)[keyof typeof ThumbnailQuality];
 
 /**
  * 將 YouTube 縮略圖 URL 轉換為指定解析度
@@ -35,7 +38,9 @@ export function getHighQualityThumbnail(
   if (!url) return url;
 
   // 匹配 YouTube 縮略圖 URL 模式
-  const match = url.match(/\/vi\/([^/]+)\/(default|mqdefault|hqdefault|sddefault|maxresdefault)\.jpg/);
+  const match = url.match(
+    /\/vi\/([^/]+)\/(default|mqdefault|hqdefault|sddefault|maxresdefault)\.jpg/,
+  );
 
   if (!match) {
     // 不是標準 YouTube 縮略圖格式，直接返回

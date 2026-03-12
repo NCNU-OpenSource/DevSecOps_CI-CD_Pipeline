@@ -1,0 +1,18 @@
+services:
+  youtube-music-bot:
+    build: .
+    image: youtube-music-bot:latest
+    container_name: youtube-music-bot
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    devices:
+      - /dev/snd:/dev/snd  # 音頻設備
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=INFO
+    # 可選：如果需要 PulseAudio（取消註解以下配置）
+    # volumes:
+    #   - /run/user/1000/pulse:/run/user/1000/pulse
+    # environment:
+    #   - PULSE_SERVER=unix:/run/user/1000/pulse/native

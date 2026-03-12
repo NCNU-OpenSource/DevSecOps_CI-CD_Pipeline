@@ -1,0 +1,49 @@
+# Node modules
+node_modules
+frontend/node_modules
+
+# 構建產物
+dist
+frontend/dist
+
+# Git
+.git
+.gitignore
+
+# 文件
+*.md
+!README.md
+
+# 探索用的 repository
+youtube-music-cli-explore
+
+# Claude 相關
+.claude
+
+# IDE
+.vscode
+.idea
+
+# 測試
+*.test.ts
+*.spec.ts
+test/
+tests/
+
+# 環境變數
+.env
+.env.local
+.env.*.local
+
+# 日誌
+*.log
+logs/
+
+# 系統文件
+.DS_Store
+Thumbs.db
+
+# Docker 相關
+Dockerfile
+docker-compose.yml
+.dockerignore
