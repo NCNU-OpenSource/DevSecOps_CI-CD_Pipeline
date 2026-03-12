@@ -1,0 +1,22 @@
+{
+  "name": "youtube-music-bot",
+  "version": "0.1.0",
+  "description": "YouTube Music 點歌機器人 WebUI",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "start": "bun run dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.17",
+    "youtubei.js": "^16.0.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.10",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  }
+}

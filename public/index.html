@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Music 點歌機器人</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 標題 -->
+    <header>
+      <h1>🎵 YouTube Music 點歌機器人</h1>
+      <div class="connection-status">
+        <span id="status-indicator" class="status-offline">⚫</span>
+        <span id="status-text">離線</span>
+      </div>
+    </header>
+
+    <!-- 搜尋區域 -->
+    <section class="search-section">
+      <h2>🔍 搜尋歌曲</h2>
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="輸入歌曲名稱、歌手或 YouTube 連結..." />
+        <button id="search-btn">搜尋</button>
+      </div>
+      <div id="search-results" class="search-results"></div>
+    </section>
+
+    <!-- 目前播放 -->
+    <section class="now-playing-section">
+      <h2>🎧 目前播放</h2>
+      <div id="now-playing" class="now-playing">
+        <p class="no-track">沒有播放中的歌曲</p>
+      </div>
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <div class="time-display">
+        <span id="current-time">0:00</span>
+        <span id="duration-time">0:00</span>
+      </div>
+    </section>
+
+    <!-- 播放控制 -->
+    <section class="controls-section">
+      <h2>🎮 播放控制</h2>
+      <div class="controls">
+        <button id="play-pause-btn" class="control-btn" disabled>▶️ 播放</button>
+        <button id="skip-btn" class="control-btn" disabled>⏭️ 下一首</button>
+      </div>
+      <div class="volume-control">
+        <label>🔊 音量：<span id="volume-value">70</span></label>
+        <input type="range" id="volume-slider" min="0" max="100" value="70" />
+      </div>
+    </section>
+
+    <!-- 播放清單 -->
+    <section class="queue-section">
+      <h2>📋 播放清單（<span id="queue-count">0</span> 首）</h2>
+      <div id="queue-list" class="queue-list">
+        <p class="no-items">播放清單是空的</p>
+      </div>
+    </section>
+
+    <!-- 歌詞顯示 -->
+    <section class="lyrics-section">
+      <h2>📝 歌詞</h2>
+      <div id="lyrics-display" class="lyrics-display">
+        <p class="no-lyrics">沒有歌詞</p>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
