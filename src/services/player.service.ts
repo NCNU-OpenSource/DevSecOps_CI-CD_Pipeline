@@ -242,17 +242,19 @@ class PlayerService {
       try {
         const mpvArgs = [
           "--no-video",
-          "--no-terminal",
+          // 移除 "--no-terminal" - 在容器環境中會導致 mpv 立即退出
           `--volume=${this.currentVolume}`,
           "--no-audio-display",
-          "--really-quiet",
-          "--msg-level=all=error",
+          // 改為更詳細的日誌以便診斷
+          "--msg-level=all=info",
           `--input-ipc-server=${this.ipcPath}`,
-          "--idle=yes",
+          // 移除 "--idle=yes" - 與直接播放 URL 衝突，導致 mpv 立即退出
           "--cache=yes",
           "--cache-secs=30",
-          "--network-timeout=10",
+          "--network-timeout=30", // 增加超時時間
           "--gapless-audio=yes",
+          "--ao=alsa", // 強制使用 ALSA 音頻輸出
+          "--audio-device=alsa/plughw:CARD=Headphones,DEV=0", // 明確指定音頻設備
           url,
         ];
 

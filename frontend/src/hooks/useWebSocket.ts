@@ -78,11 +78,16 @@ export const useWebSocket = () => {
 
     // 開發模式直接連接到後端，生產模式使用相對路徑
     const isDev = import.meta.env.DEV;
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = isDev
       ? "ws://localhost:3000/ws"
-      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}://${window.location.host}/ws`;
+      : `${protocol}://${window.location.host}/ws`;
 
-    console.log("嘗試連接 WebSocket:", wsUrl);
+    console.log(
+      "嘗試連接 WebSocket:",
+      wsUrl,
+      `(protocol: ${window.location.protocol})`,
+    );
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {

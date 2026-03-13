@@ -10,6 +10,7 @@ RUN npm run build
 # Stage 2: 構建後端
 FROM oven/bun:1 AS backend-builder
 WORKDIR /app
+ENV NODE_ENV=production
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile
 COPY src/ ./src/
