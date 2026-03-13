@@ -7,9 +7,9 @@ interface MainLayoutProps {
 
 export const MainLayout = ({ children, onSearchClick }: MainLayoutProps) => {
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50 dark:bg-gray-900">
+    <div className="flex h-screen flex-col bg-gray-50 dark:bg-gray-900 overflow-hidden">
       <Header onSearchClick={onSearchClick} />
-      <main className="flex-1 overflow-hidden lg:overflow-visible">
+      <main className="flex-1 overflow-hidden min-h-0">
         {/* 桌面版：有 padding 和 max-width */}
         <div className="hidden lg:block mx-auto max-w-7xl p-6 h-full">
           {children}

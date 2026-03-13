@@ -85,8 +85,8 @@ export const LyricsContent = ({
   return (
     <ScrollArea
       ref={scrollAreaRef}
-      className={cn("h-full", className)}
-      maxHeight="none"
+      className={cn("w-full h-full", className)}
+      maxHeight="100%"
     >
       <div className="space-y-2 py-4 px-4">
         {lyrics.map((line, index) => (

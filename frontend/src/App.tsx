@@ -49,8 +49,8 @@ function App() {
           </div>
 
           {/* 右側：標籤切換（歌詞/播放佇列） */}
-          <div className="flex flex-col gap-6">
-            <div className="flex-1">
+          <div className="flex flex-col gap-6 h-full">
+            <div className="flex-1 min-h-0">
               <Tabs defaultValue="lyrics" className="h-full flex flex-col">
                 <div className="pb-4">
                   <TabsList className="grid w-full grid-cols-2">
