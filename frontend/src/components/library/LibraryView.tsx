@@ -503,6 +503,7 @@ const DesktopLibraryHome = ({
               emptyDescription="先把喜歡的歌加入收藏，這裡就會累積成自己的常聽清單。"
               tracks={favoriteTracks}
               getActionLabel={() => "移除收藏"}
+              isActionActive={() => true}
               onAction={onTrackFavorite}
               onQueueAction={onTrackQueue}
               onPlaylistAction={onTrackPlaylist}
@@ -517,6 +518,7 @@ const DesktopLibraryHome = ({
               getActionLabel={(track) =>
                 favoriteTrackIds.has(track.videoId) ? "取消收藏" : "收藏"
               }
+              isActionActive={(track) => favoriteTrackIds.has(track.videoId)}
               onAction={onTrackFavorite}
               onQueueAction={onTrackQueue}
               onPlaylistAction={onTrackPlaylist}
@@ -621,6 +623,7 @@ const MobileLibraryHome = ({
               emptyDescription="先把喜歡的歌加入收藏，這裡就會累積成自己的常聽清單。"
               tracks={favoriteTracks}
               getActionLabel={() => "移除收藏"}
+              isActionActive={() => true}
               onAction={onTrackFavorite}
               onQueueAction={onTrackQueue}
               onPlaylistAction={onTrackPlaylist}
@@ -635,6 +638,7 @@ const MobileLibraryHome = ({
               getActionLabel={(track) =>
                 favoriteTrackIds.has(track.videoId) ? "取消收藏" : "收藏"
               }
+              isActionActive={(track) => favoriteTrackIds.has(track.videoId)}
               onAction={onTrackFavorite}
               onQueueAction={onTrackQueue}
               onPlaylistAction={onTrackPlaylist}
@@ -786,18 +790,21 @@ const PlaylistBrowser = ({
               <button
                 key={playlist.id}
                 type="button"
-                className="surface-card flex items-center justify-between gap-4 rounded-[24px] border px-4 py-4 text-left transition-transform hover:-translate-y-0.5"
+                className="surface-card grid items-center gap-4 rounded-[24px] border px-4 py-4 text-left transition-transform hover:-translate-y-0.5 md:grid-cols-[minmax(0,1fr)_auto]"
                 onClick={() => onOpenPlaylist(playlist.id)}
               >
                 <div className="min-w-0">
-                  <p className="truncate text-base font-semibold text-[var(--text-primary)]">
+                  <p
+                    className="truncate text-base font-semibold text-[var(--text-primary)]"
+                    title={playlist.name}
+                  >
                     {playlist.name}
                   </p>
                   <p className="mt-1 text-sm text-[var(--text-secondary)]">
                     {playlist.tracks.length} 首歌曲
                   </p>
                 </div>
-                <span className="inline-flex items-center gap-1 text-sm font-semibold text-[var(--accent)]">
+                <span className="inline-flex shrink-0 items-center gap-1 text-sm font-semibold text-[var(--accent)]">
                   打開
                   <ChevronRight className="h-4 w-4" />
                 </span>
@@ -816,6 +823,7 @@ const TrackBrowser = ({
   emptyDescription,
   tracks,
   getActionLabel,
+  isActionActive,
   onAction,
   onQueueAction,
   onPlaylistAction,
@@ -825,6 +833,7 @@ const TrackBrowser = ({
   emptyDescription: string;
   tracks: PlaylistTrackEntry["track"][];
   getActionLabel: (track: PlaylistTrackEntry["track"]) => string;
+  isActionActive?: (track: PlaylistTrackEntry["track"]) => boolean;
   onAction: (track: PlaylistTrackEntry["track"]) => void;
   onQueueAction: (track: PlaylistTrackEntry["track"]) => void;
   onPlaylistAction: (track: PlaylistTrackEntry["track"]) => void;
@@ -842,7 +851,7 @@ const TrackBrowser = ({
                 "surface-card gap-4 rounded-[24px] border",
                 isMobile
                   ? "flex flex-col px-4 py-4"
-                  : "flex items-center px-4 py-4",
+                  : "grid items-center px-4 py-4 md:grid-cols-[minmax(0,1fr)_132px]",
               )}
             >
               <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -858,37 +867,70 @@ const TrackBrowser = ({
                       "font-semibold text-[var(--text-primary)]",
                       isMobile ? "line-clamp-2 text-base leading-6" : "truncate text-base",
                     )}
+                    title={track.title}
                   >
                     {track.title}
                   </p>
-                  <p className="truncate text-sm text-[var(--text-secondary)]">
+                  <p
+                    className="truncate text-sm text-[var(--text-secondary)]"
+                    title={`${track.artist} · ${formatTime(track.duration)}`}
+                  >
                     {track.artist} · {formatTime(track.duration)}
                   </p>
                 </div>
               </div>
               <div
                 className={cn(
-                  "flex shrink-0 gap-2",
-                  isMobile ? "flex-wrap" : "items-center justify-end",
+                  "shrink-0 gap-2",
+                  isMobile
+                    ? "flex w-full flex-wrap"
+                    : "grid w-[132px] grid-cols-3 justify-self-end",
                 )}
               >
                 <Button
                   variant="outline"
-                  className="rounded-2xl px-3"
+                  className={cn(
+                    "rounded-2xl",
+                    isMobile ? "px-3" : "h-10 w-10 rounded-[18px] px-0",
+                  )}
                   onClick={() => onQueueAction(track)}
                   aria-label={`加入播放佇列：${track.title}`}
+                  title="加入播放佇列"
                 >
                   <Plus className="h-4 w-4" />
+                  {isMobile ? <span>加入佇列</span> : null}
                 </Button>
                 <Button
                   variant="outline"
-                  className="rounded-2xl"
+                  className={cn(
+                    "rounded-2xl",
+                    isMobile ? undefined : "h-10 w-10 rounded-[18px] px-0",
+                  )}
                   onClick={() => onPlaylistAction(track)}
+                  aria-label={`加入歌單：${track.title}`}
+                  title="加入歌單"
                 >
-                  加入歌單
+                  <ListMusic className="h-4 w-4" />
+                  {isMobile ? <span>加入歌單</span> : null}
                 </Button>
-                <Button className="rounded-2xl" onClick={() => onAction(track)}>
-                  {getActionLabel(track)}
+                <Button
+                  variant={isMobile ? "default" : "outline"}
+                  className={cn(
+                    "rounded-2xl",
+                    !isMobile && "h-10 w-10 rounded-[18px] px-0",
+                    isActionActive?.(track) &&
+                      !isMobile &&
+                      "border-[color:var(--dynamic-ring)] bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent-soft)]",
+                  )}
+                  onClick={() => onAction(track)}
+                  aria-label={`${getActionLabel(track)}：${track.title}`}
+                  title={getActionLabel(track)}
+                >
+                  <Heart
+                    className="h-4 w-4"
+                    fill={isActionActive?.(track) ? "currentColor" : "none"}
+                  />
+                  {isMobile ? <span>{getActionLabel(track)}</span> : null}
                 </Button>
               </div>
             </div>
@@ -1185,7 +1227,7 @@ const PlaylistDetail = ({
                 void onDropTrack(draggingIndex, index);
                 onDragEnd();
               }}
-              className="surface-subtle grid gap-4 rounded-[24px] border px-4 py-4 md:grid-cols-[auto_auto_minmax(0,1fr)_auto]"
+              className="surface-subtle grid gap-4 rounded-[24px] border px-4 py-4 md:grid-cols-[auto_auto_minmax(0,1fr)_88px]"
             >
               <button
                 type="button"
@@ -1196,21 +1238,35 @@ const PlaylistDetail = ({
               </button>
               <Avatar src={entry.track.thumbnail} alt={entry.track.title} size="md" className="rounded-2xl" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-base font-semibold text-[var(--text-primary)]">
+                <p
+                  className="truncate text-base font-semibold text-[var(--text-primary)]"
+                  title={entry.track.title}
+                >
                   {entry.track.title}
                 </p>
-                <p className="truncate text-sm text-[var(--text-secondary)]">
+                <p
+                  className="truncate text-sm text-[var(--text-secondary)]"
+                  title={`${entry.track.artist} · ${formatTime(entry.track.duration)}`}
+                >
                   {entry.track.artist} · {formatTime(entry.track.duration)}
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2 md:justify-end">
-                <Button variant="outline" className="rounded-2xl" onClick={() => onOpenAddTrack(entry.track)}>
+              <div className="grid shrink-0 grid-cols-2 gap-2 md:w-[88px] md:justify-self-end">
+                <Button
+                  variant="outline"
+                  className="rounded-2xl px-0"
+                  onClick={() => onOpenAddTrack(entry.track)}
+                  aria-label={`加入歌單：${entry.track.title}`}
+                  title="加入歌單"
+                >
                   <Plus className="h-4 w-4" />
                 </Button>
                 <Button
                   variant="outline"
-                  className="rounded-2xl"
+                  className="rounded-2xl px-0"
                   onClick={() => void onRemoveTrack(entry.id)}
+                  aria-label={`從歌單移除：${entry.track.title}`}
+                  title="從歌單移除"
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>

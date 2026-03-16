@@ -19,12 +19,12 @@ export const MainLayout = ({
       <div className="relative z-10 flex h-screen flex-col overflow-hidden">
         <Header onSearchClick={onSearchClick} />
         <main className="flex-1 overflow-hidden min-h-0">
-        {/* 桌面版：有 padding 和 max-width */}
-          <div className="hidden lg:block mx-auto h-full max-w-[1480px] px-6 py-5 min-h-0">
+          {/* 桌面版：有 padding 和 max-width */}
+          <div className="mx-auto hidden h-full min-h-0 max-w-[1480px] px-4 py-4 lg:block xl:px-6 xl:py-5">
             {children}
           </div>
           {/* 手機版：全高度 */}
-          <div className="lg:hidden h-full">{children}</div>
+          <div className="h-full lg:hidden">{children}</div>
         </main>
       </div>
     </div>

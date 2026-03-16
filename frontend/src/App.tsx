@@ -63,12 +63,12 @@ function App() {
             "hidden h-full min-h-0 lg:block",
             desktopMode === "player" &&
               !isDesktopIdle &&
-              "lg:grid lg:gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.1fr)] xl:grid-cols-[minmax(420px,0.92fr)_minmax(0,1.08fr)]",
+              "lg:grid lg:gap-4 lg:grid-cols-[minmax(360px,1fr)_minmax(0,1fr)] xl:gap-6 xl:grid-cols-[minmax(420px,0.95fr)_minmax(0,1.05fr)]",
           )}
         >
           {desktopMode === "library" ? (
-            <div className="grid h-full min-h-0 w-full gap-6 lg:grid-cols-[minmax(320px,380px)_minmax(0,1fr)] xl:grid-cols-[minmax(340px,400px)_minmax(0,1fr)]">
-              <div className="flex h-full min-h-0 flex-col gap-6">
+            <div className="grid h-full min-h-0 w-full gap-4 lg:grid-cols-[minmax(300px,360px)_minmax(0,1fr)] xl:gap-6 xl:grid-cols-[minmax(340px,400px)_minmax(0,1fr)]">
+              <div className="flex h-full min-h-0 flex-col gap-4 xl:gap-6">
                 <PlayerSection sidebarMode onSearchClick={handleSearchOpen} />
               </div>
               <div className="h-full min-h-0">
@@ -82,19 +82,19 @@ function App() {
           ) : (
             <>
               {/* 左側：播放器 */}
-              <div className="flex min-h-0 flex-col gap-6">
+              <div className="flex min-h-0 flex-col gap-4 xl:gap-6">
                 <PlayerSection onSearchClick={handleSearchOpen} />
               </div>
 
               {/* 右側：標籤切換（歌詞/播放佇列） */}
-              <div className="flex h-full min-h-0 flex-col gap-6">
+              <div className="flex h-full min-h-0 flex-col gap-4 xl:gap-6">
                 <div className="flex-1 min-h-0">
                   <Tabs
                     value={desktopActiveTab}
                     onValueChange={setDesktopActiveTab}
                     className="flex h-full min-h-0 flex-col"
                   >
-                    <div className="pb-4">
+                    <div className="pb-3 xl:pb-4">
                       <TabsList className="grid w-full grid-cols-2">
                         <TabsTrigger value="lyrics">歌詞</TabsTrigger>
                         <TabsTrigger value="queue">播放佇列</TabsTrigger>

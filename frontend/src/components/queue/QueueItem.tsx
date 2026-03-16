@@ -81,7 +81,12 @@ export const QueueItem = ({
           )}
         />
       ) : null}
-      <div className={cn("flex gap-3", mobile ? "items-start gap-2.5" : "items-center")}>
+      <div
+        className={cn(
+          "flex min-w-0 gap-3",
+          mobile ? "items-start gap-2.5" : "items-center",
+        )}
+      >
         <div
           className={cn(
             "flex items-center justify-center gap-1",
@@ -127,7 +132,7 @@ export const QueueItem = ({
         <div className="min-w-0 flex-1">
           <div
             className={cn(
-              "mb-1 gap-2",
+              "mb-1 min-w-0 gap-2",
               mobile ? "flex flex-col items-start gap-1.5" : "flex items-center",
             )}
           >
@@ -148,6 +153,7 @@ export const QueueItem = ({
                   ? "line-clamp-2 text-[1rem] font-semibold leading-6"
                   : "truncate text-sm font-medium",
               )}
+              title={track.title}
             >
               {track.title}
             </h4>
@@ -157,6 +163,7 @@ export const QueueItem = ({
               "truncate text-[var(--text-secondary)]",
               mobile ? "text-[0.98rem] leading-5" : "text-xs",
             )}
+            title={`${track.artist} • ${formatTime(track.duration)}`}
           >
             {track.artist} • {formatTime(track.duration)}
           </p>
@@ -164,7 +171,7 @@ export const QueueItem = ({
         <div
           className={cn(
             "shrink-0",
-            mobile ? "flex flex-col gap-1 pt-1" : "flex items-center gap-1",
+            mobile ? "flex flex-col gap-1 pt-1" : "grid w-[120px] grid-cols-3 gap-1 justify-items-end",
           )}
         >
           {!mobile ? (
@@ -175,7 +182,7 @@ export const QueueItem = ({
               disabled={favoriteDisabled}
               title={isFavorite ? "取消收藏" : "收藏"}
               className={cn(
-                "opacity-40 transition-opacity group-hover:opacity-100",
+                "h-9 w-9 rounded-xl px-0 opacity-40 transition-opacity group-hover:opacity-100",
                 isFavorite &&
                   "text-[var(--accent)] opacity-100 hover:text-[var(--accent)]",
               )}
@@ -194,7 +201,7 @@ export const QueueItem = ({
             className={cn(
               mobile
                 ? "h-8 w-8 rounded-xl px-0 text-[var(--text-secondary)]"
-                : "opacity-40 transition-opacity group-hover:opacity-100",
+                : "h-9 w-9 rounded-xl px-0 opacity-40 transition-opacity group-hover:opacity-100",
             )}
           >
             <Library className="h-4 w-4" />
@@ -208,7 +215,7 @@ export const QueueItem = ({
             className={cn(
               mobile
                 ? "h-8 w-8 rounded-xl px-0 text-[var(--text-secondary)]"
-                : "opacity-40 transition-opacity group-hover:opacity-100",
+                : "h-9 w-9 rounded-xl px-0 opacity-40 transition-opacity group-hover:opacity-100",
             )}
           >
             <svg

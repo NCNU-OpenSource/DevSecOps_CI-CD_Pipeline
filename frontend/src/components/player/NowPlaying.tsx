@@ -114,13 +114,14 @@ export const NowPlaying = ({
 
   return (
     <div
-      className={
+      className={cn(
+        "min-w-0",
         isSidebarCompact
-          ? "grid items-center gap-5 grid-cols-[132px_minmax(0,1fr)]"
+          ? "grid items-center gap-4 grid-cols-[116px_minmax(0,1fr)] xl:gap-5 xl:grid-cols-[132px_minmax(0,1fr)]"
           : compact
-          ? "grid items-center gap-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-8"
-          : "flex flex-col gap-7 lg:gap-8"
-      }
+          ? "grid items-center gap-5 lg:grid-cols-[188px_minmax(0,1fr)] lg:gap-6 xl:grid-cols-[220px_minmax(0,1fr)] xl:gap-8"
+          : "flex flex-col gap-6 lg:gap-7"
+      )}
     >
       <div className="flex justify-center lg:justify-start">
         <AnimatedAvatar
@@ -130,42 +131,46 @@ export const NowPlaying = ({
           thumbnailQuality="maxresdefault"
           className={
             isSidebarCompact
-              ? "h-32 w-32 rounded-[24px] border border-[color:var(--dynamic-ring)] shadow-[0_20px_40px_-24px_rgba(15,23,42,0.75)]"
+              ? "h-28 w-28 rounded-[22px] border border-[color:var(--dynamic-ring)] shadow-[0_20px_40px_-24px_rgba(15,23,42,0.75)] xl:h-32 xl:w-32 xl:rounded-[24px]"
               : compact
-              ? "h-48 w-48 rounded-[30px] border border-[color:var(--dynamic-ring)] shadow-[0_26px_54px_-28px_rgba(15,23,42,0.85)] lg:h-56 lg:w-56"
+              ? "h-40 w-40 rounded-[28px] border border-[color:var(--dynamic-ring)] shadow-[0_26px_54px_-28px_rgba(15,23,42,0.85)] lg:h-48 lg:w-48 xl:h-56 xl:w-56 xl:rounded-[30px]"
               : "h-52 w-52 rounded-[32px] border border-[color:var(--dynamic-ring)] shadow-[0_26px_54px_-28px_rgba(15,23,42,0.85)] lg:h-64 lg:w-64"
           }
         />
       </div>
       <div
         className={cn(
-          "space-y-4 text-center lg:text-left",
+          "min-w-0 space-y-4 text-center lg:text-left",
           isSidebarCompact && "space-y-3 text-left",
         )}
       >
         <span className="inline-flex rounded-full border border-[color:var(--dynamic-ring)] bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-primary)]">
           {isPlaying ? "Now Playing" : "Paused"}
         </span>
-        <div className="space-y-2">
+        <div className="min-w-0 space-y-2">
           <h2
-            className={
+            className={cn(
+              "text-[var(--text-primary)]",
               isSidebarCompact
-                ? "line-clamp-2 text-[2.2rem] font-semibold tracking-tight text-[var(--text-primary)]"
+                ? "line-clamp-2 text-[1.9rem] font-semibold tracking-tight xl:text-[2.2rem]"
                 : compact
-                ? "line-clamp-3 text-3xl font-semibold tracking-tight text-[var(--text-primary)] lg:text-[2.9rem]"
-                : "line-clamp-2 text-3xl font-semibold tracking-tight text-[var(--text-primary)] lg:text-[2.6rem]"
-            }
+                ? "line-clamp-2 text-[2.2rem] font-semibold tracking-tight lg:text-[2.35rem] xl:text-[2.8rem]"
+                : "line-clamp-2 text-3xl font-semibold tracking-tight lg:text-[2.4rem] xl:text-[2.6rem]",
+            )}
+            title={currentTrack.title}
           >
             {currentTrack.title}
           </h2>
           <p
-            className={
+            className={cn(
+              "truncate text-[var(--text-secondary)]",
               isSidebarCompact
-                ? "text-lg text-[var(--text-secondary)]"
+                ? "text-base xl:text-lg"
                 : compact
-                  ? "text-xl text-[var(--text-secondary)]"
-                  : "text-lg text-[var(--text-secondary)] lg:text-xl"
-            }
+                  ? "text-lg lg:text-xl"
+                  : "text-lg lg:text-lg xl:text-xl",
+            )}
+            title={currentTrack.artist}
           >
             {currentTrack.artist}
           </p>

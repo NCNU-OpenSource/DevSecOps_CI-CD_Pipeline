@@ -83,10 +83,16 @@ export const MiniPlayer = () => {
               />
 
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-[var(--text-primary)]">
+                <p
+                  className="truncate text-sm font-semibold text-[var(--text-primary)]"
+                  title={currentTrack.title}
+                >
                   {currentTrack.title}
                 </p>
-                <p className="truncate text-xs text-[var(--text-secondary)]">
+                <p
+                  className="truncate text-xs text-[var(--text-secondary)]"
+                  title={currentTrack.artist}
+                >
                   {currentTrack.artist}
                 </p>
               </div>

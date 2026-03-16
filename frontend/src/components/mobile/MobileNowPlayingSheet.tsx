@@ -126,10 +126,16 @@ export const MobileNowPlayingSheet = () => {
                       {isPlaying ? "Now Playing" : "Paused"}
                     </span>
                     <div className="space-y-2">
-                      <h2 className="text-[2.25rem] font-semibold leading-none tracking-tight text-[var(--text-primary)]">
+                      <h2
+                        className="line-clamp-2 text-[2.1rem] font-semibold leading-tight tracking-tight text-[var(--text-primary)]"
+                        title={currentTrack.title}
+                      >
                         {currentTrack.title}
                       </h2>
-                      <p className="text-xl text-[var(--text-secondary)]">
+                      <p
+                        className="line-clamp-1 text-xl text-[var(--text-secondary)]"
+                        title={currentTrack.artist}
+                      >
                         {currentTrack.artist}
                       </p>
                     </div>
@@ -188,10 +194,16 @@ export const MobileNowPlayingSheet = () => {
                   <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--accent)]">
                     {mobileNowPlayingView === "lyrics" ? "Lyrics View" : "Queue View"}
                   </p>
-                  <p className="truncate text-[1rem] font-semibold text-[var(--text-primary)]">
+                  <p
+                    className="truncate text-[1rem] font-semibold text-[var(--text-primary)]"
+                    title={currentTrack.title}
+                  >
                     {currentTrack.title}
                   </p>
-                  <p className="truncate text-sm text-[var(--text-secondary)]">
+                  <p
+                    className="truncate text-sm text-[var(--text-secondary)]"
+                    title={currentTrack.artist}
+                  >
                     {currentTrack.artist}
                   </p>
                 </div>
