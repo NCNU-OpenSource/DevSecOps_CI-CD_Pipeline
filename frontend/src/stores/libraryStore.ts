@@ -100,6 +100,72 @@ function upsertPlaylist(playlists: Playlist[], playlist: Playlist): Playlist[] {
   return playlists.map((item) => (item.id === playlist.id ? playlist : item));
 }
 
+function upsertRemovedFavorite(
+  items: LibrarySnapshot["removedFavorites"],
+  videoId: string,
+  removedAt: string,
+) {
+  const current = items ?? [];
+  const existingIndex = current.findIndex((item) => item.videoId === videoId);
+
+  if (existingIndex === -1) {
+    return [...current, { videoId, removedAt }];
+  }
+
+  return current.map((item, index) =>
+    index === existingIndex
+      ? {
+          ...item,
+          removedAt: item.removedAt >= removedAt ? item.removedAt : removedAt,
+        }
+      : item,
+  );
+}
+
+function upsertDeletedPlaylist(
+  items: LibrarySnapshot["deletedPlaylists"],
+  playlistId: string,
+  removedAt: string,
+) {
+  const current = items ?? [];
+  const existingIndex = current.findIndex((item) => item.id === playlistId);
+
+  if (existingIndex === -1) {
+    return [...current, { id: playlistId, removedAt }];
+  }
+
+  return current.map((item, index) =>
+    index === existingIndex
+      ? {
+          ...item,
+          removedAt: item.removedAt >= removedAt ? item.removedAt : removedAt,
+        }
+      : item,
+  );
+}
+
+function upsertDeletedSavedMix(
+  items: LibrarySnapshot["deletedSavedMixes"],
+  mixId: string,
+  removedAt: string,
+) {
+  const current = items ?? [];
+  const existingIndex = current.findIndex((item) => item.id === mixId);
+
+  if (existingIndex === -1) {
+    return [...current, { id: mixId, removedAt }];
+  }
+
+  return current.map((item, index) =>
+    index === existingIndex
+      ? {
+          ...item,
+          removedAt: item.removedAt >= removedAt ? item.removedAt : removedAt,
+        }
+      : item,
+  );
+}
+
 export const useLibraryStore = create<LibraryStore>((set, get) => ({
   ready: false,
   snapshot: null,
@@ -215,9 +281,15 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     }));
   },
   deletePlaylist: async (playlistId) => {
+    const removedAt = new Date().toISOString();
     await persistSnapshot((snapshot) => ({
       ...snapshot,
       playlists: snapshot.playlists.filter((playlist) => playlist.id !== playlistId),
+      deletedPlaylists: upsertDeletedPlaylist(
+        snapshot.deletedPlaylists,
+        playlistId,
+        removedAt,
+      ),
     }));
 
     if (get().selectedPlaylistId === playlistId) {
@@ -284,6 +356,7 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
       const existingFavorite = snapshot.favorites.find(
         (favorite) => favorite.videoId === normalizedTrack.videoId,
       );
+      const changedAt = new Date().toISOString();
 
       if (existingFavorite) {
         return {
@@ -291,19 +364,27 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
           favorites: snapshot.favorites.filter(
             (favorite) => favorite.videoId !== normalizedTrack.videoId,
           ),
+          removedFavorites: upsertRemovedFavorite(
+            snapshot.removedFavorites,
+            normalizedTrack.videoId,
+            changedAt,
+          ),
         };
       }
 
       const favorite: FavoriteTrack = {
         videoId: normalizedTrack.videoId,
         track: normalizedTrack,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: changedAt,
+        updatedAt: changedAt,
       };
 
       return {
         ...snapshot,
         favorites: [favorite, ...snapshot.favorites],
+        removedFavorites: (snapshot.removedFavorites ?? []).filter(
+          (item) => item.videoId !== normalizedTrack.videoId,
+        ),
       };
     });
   },
@@ -338,9 +419,15 @@ export const useLibraryStore = create<LibraryStore>((set, get) => ({
     }));
   },
   deleteSavedMix: async (mixId) => {
+    const removedAt = new Date().toISOString();
     await persistSnapshot((snapshot) => ({
       ...snapshot,
       savedMixes: snapshot.savedMixes.filter((savedMix) => savedMix.id !== mixId),
+      deletedSavedMixes: upsertDeletedSavedMix(
+        snapshot.deletedSavedMixes,
+        mixId,
+        removedAt,
+      ),
     }));
   },
 }));

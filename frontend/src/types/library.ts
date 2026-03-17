@@ -7,6 +7,11 @@ export interface FavoriteTrack {
   updatedAt: string;
 }
 
+export interface RemovedFavorite {
+  videoId: string;
+  removedAt: string;
+}
+
 export interface HistoryEntry {
   id: string;
   track: Track;
@@ -18,6 +23,11 @@ export interface SavedMix {
   seedTrack: Track;
   tracks: Track[];
   createdAt: string;
+}
+
+export interface DeletedSavedMix {
+  id: string;
+  removedAt: string;
 }
 
 export interface PlaylistTrackEntry {
@@ -32,6 +42,11 @@ export interface Playlist {
   tracks: PlaylistTrackEntry[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DeletedPlaylist {
+  id: string;
+  removedAt: string;
 }
 
 export interface PairedDevice {
@@ -55,6 +70,9 @@ export interface LibrarySnapshot {
   history: HistoryEntry[];
   savedMixes: SavedMix[];
   playlists: Playlist[];
+  removedFavorites?: RemovedFavorite[];
+  deletedPlaylists?: DeletedPlaylist[];
+  deletedSavedMixes?: DeletedSavedMix[];
   pairedDevices: PairedDevice[];
 }
 
@@ -66,6 +84,9 @@ export interface SyncedLibraryPayload {
   history: HistoryEntry[];
   savedMixes: SavedMix[];
   playlists: Playlist[];
+  removedFavorites?: RemovedFavorite[];
+  deletedPlaylists?: DeletedPlaylist[];
+  deletedSavedMixes?: DeletedSavedMix[];
 }
 
 export interface SyncSessionDevice {
