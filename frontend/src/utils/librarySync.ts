@@ -1,9 +1,12 @@
 import type {
+  DeletedPlaylist,
+  DeletedSavedMix,
   FavoriteTrack,
   HistoryEntry,
   LibrarySnapshot,
   PairedDevice,
   Playlist,
+  RemovedFavorite,
   SavedMix,
   SyncSessionDevice,
   SyncedLibraryPayload,
@@ -51,6 +54,27 @@ function pickLatestPlaylist(left: Playlist, right: Playlist): Playlist {
   return left.updatedAt >= right.updatedAt ? left : right;
 }
 
+function pickLatestRemovedFavorite(
+  left: RemovedFavorite,
+  right: RemovedFavorite,
+): RemovedFavorite {
+  return left.removedAt >= right.removedAt ? left : right;
+}
+
+function pickLatestDeletedPlaylist(
+  left: DeletedPlaylist,
+  right: DeletedPlaylist,
+): DeletedPlaylist {
+  return left.removedAt >= right.removedAt ? left : right;
+}
+
+function pickLatestDeletedSavedMix(
+  left: DeletedSavedMix,
+  right: DeletedSavedMix,
+): DeletedSavedMix {
+  return left.removedAt >= right.removedAt ? left : right;
+}
+
 function sortFavorites(items: FavoriteTrack[]): FavoriteTrack[] {
   return [...items].sort((left, right) =>
     compareIsoDateDesc(left.updatedAt, right.updatedAt),
@@ -75,6 +99,24 @@ function sortPlaylists(items: Playlist[]): Playlist[] {
   );
 }
 
+function sortRemovedFavorites(items: RemovedFavorite[]): RemovedFavorite[] {
+  return [...items].sort((left, right) =>
+    compareIsoDateDesc(left.removedAt, right.removedAt),
+  );
+}
+
+function sortDeletedPlaylists(items: DeletedPlaylist[]): DeletedPlaylist[] {
+  return [...items].sort((left, right) =>
+    compareIsoDateDesc(left.removedAt, right.removedAt),
+  );
+}
+
+function sortDeletedSavedMixes(items: DeletedSavedMix[]): DeletedSavedMix[] {
+  return [...items].sort((left, right) =>
+    compareIsoDateDesc(left.removedAt, right.removedAt),
+  );
+}
+
 export function toSyncedLibraryPayload(
   snapshot: LibrarySnapshot,
 ): SyncedLibraryPayload {
@@ -86,6 +128,9 @@ export function toSyncedLibraryPayload(
     history: snapshot.history,
     savedMixes: snapshot.savedMixes,
     playlists: snapshot.playlists,
+    removedFavorites: snapshot.removedFavorites ?? [],
+    deletedPlaylists: snapshot.deletedPlaylists ?? [],
+    deletedSavedMixes: snapshot.deletedSavedMixes ?? [],
   };
 }
 
@@ -93,6 +138,43 @@ export function mergeLibraryPayload(
   currentSnapshot: LibrarySnapshot,
   incomingPayload: SyncedLibraryPayload,
 ): LibrarySnapshot {
+  const removedFavorites = sortRemovedFavorites(
+    mergeByKey(
+      currentSnapshot.removedFavorites ?? [],
+      incomingPayload.removedFavorites ?? [],
+      (item) => item.videoId,
+      pickLatestRemovedFavorite,
+    ),
+  );
+
+  const deletedPlaylists = sortDeletedPlaylists(
+    mergeByKey(
+      currentSnapshot.deletedPlaylists ?? [],
+      incomingPayload.deletedPlaylists ?? [],
+      (item) => item.id,
+      pickLatestDeletedPlaylist,
+    ),
+  );
+
+  const deletedSavedMixes = sortDeletedSavedMixes(
+    mergeByKey(
+      currentSnapshot.deletedSavedMixes ?? [],
+      incomingPayload.deletedSavedMixes ?? [],
+      (item) => item.id,
+      pickLatestDeletedSavedMix,
+    ),
+  );
+
+  const removedFavoritesByVideoId = new Map(
+    removedFavorites.map((item) => [item.videoId, item]),
+  );
+  const deletedPlaylistsById = new Map(
+    deletedPlaylists.map((item) => [item.id, item]),
+  );
+  const deletedSavedMixesById = new Map(
+    deletedSavedMixes.map((item) => [item.id, item]),
+  );
+
   const favorites = sortFavorites(
     mergeByKey(
       currentSnapshot.favorites,
@@ -100,7 +182,10 @@ export function mergeLibraryPayload(
       (item) => item.videoId,
       pickLatestFavorite,
     ),
-  );
+  ).filter((favorite) => {
+    const removed = removedFavoritesByVideoId.get(favorite.videoId);
+    return !removed || removed.removedAt < favorite.updatedAt;
+  });
 
   const history = sortHistory(
     mergeByKey(
@@ -118,7 +203,10 @@ export function mergeLibraryPayload(
       (item) => item.id,
       (left, right) => (left.createdAt >= right.createdAt ? left : right),
     ),
-  );
+  ).filter((savedMix) => {
+    const deleted = deletedSavedMixesById.get(savedMix.id);
+    return !deleted || deleted.removedAt < savedMix.createdAt;
+  });
 
   const playlists = sortPlaylists(
     mergeByKey(
@@ -127,7 +215,10 @@ export function mergeLibraryPayload(
       (item) => item.id,
       pickLatestPlaylist,
     ),
-  );
+  ).filter((playlist) => {
+    const deleted = deletedPlaylistsById.get(playlist.id);
+    return !deleted || deleted.removedAt < playlist.updatedAt;
+  });
 
   return {
     ...currentSnapshot,
@@ -141,6 +232,9 @@ export function mergeLibraryPayload(
     history,
     savedMixes,
     playlists,
+    removedFavorites,
+    deletedPlaylists,
+    deletedSavedMixes,
   };
 }
 

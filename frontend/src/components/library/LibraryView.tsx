@@ -1035,8 +1035,8 @@ const DevicesPanel = ({
         使用配對碼連接不同裝置，讓收藏、歷史、Mix 和歌單一起同步。
       </p>
     </div>
-    <div className="mb-5 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-      <div className="surface-subtle rounded-[24px] border px-4 py-4">
+    <div className="mb-5 grid gap-3">
+      <div className="surface-subtle min-w-0 rounded-[24px] border px-4 py-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
           配對碼
         </p>
@@ -1052,15 +1052,15 @@ const DevicesPanel = ({
         </p>
         {syncError ? <p className="mt-2 text-sm text-red-500">{syncError}</p> : null}
       </div>
-      <div className="flex flex-col gap-3">
+      <div className="min-w-0 grid gap-3">
         <input
           value={pairCodeInput}
           onChange={(event) => onPairCodeInputChange(event.target.value.toUpperCase())}
           placeholder="輸入配對碼"
-          className="h-12 min-w-[200px] rounded-2xl border border-[color:var(--surface-border)] bg-[var(--surface-subtle)] px-4 text-sm tracking-[0.22em] text-[var(--text-primary)] uppercase outline-none"
+          className="h-12 w-full min-w-0 rounded-2xl border border-[color:var(--surface-border)] bg-[var(--surface-subtle)] px-4 text-sm tracking-[0.22em] text-[var(--text-primary)] uppercase outline-none"
         />
         <Button
-          className="h-12 rounded-2xl px-5"
+          className="h-12 w-full rounded-2xl px-5"
           disabled={isPairing || pairCodeInput.trim().length < 6}
           onClick={onPairDevice}
         >

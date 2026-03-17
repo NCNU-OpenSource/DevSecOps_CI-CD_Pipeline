@@ -6,6 +6,13 @@ import {
 } from "../../frontend/src/utils/librarySync.ts";
 import type { LibrarySnapshot } from "../../frontend/src/types/library.ts";
 
+const trackOne = {
+  videoId: "track-1",
+  title: "Track 1",
+  artist: "Artist 1",
+  duration: 180,
+};
+
 const baseSnapshot: LibrarySnapshot = {
   profileId: "profile-a",
   deviceId: "device-a",
@@ -16,6 +23,9 @@ const baseSnapshot: LibrarySnapshot = {
   history: [],
   savedMixes: [],
   playlists: [],
+  removedFavorites: [],
+  deletedPlaylists: [],
+  deletedSavedMixes: [],
   pairedDevices: [
     {
       id: "device-a",
@@ -37,12 +47,7 @@ describe("library sync helpers", () => {
       favorites: [
         {
           videoId: "track-1",
-          track: {
-            videoId: "track-1",
-            title: "Track 1",
-            artist: "Artist 1",
-            duration: 180,
-          },
+          track: trackOne,
           createdAt: "2026-03-15T01:00:00.000Z",
           updatedAt: "2026-03-15T01:00:00.000Z",
         },
@@ -62,6 +67,162 @@ describe("library sync helpers", () => {
     expect(merged.favorites).toHaveLength(1);
     expect(merged.playlists).toHaveLength(1);
     expect(merged.updatedAt).toBe("2026-03-15T01:00:00.000Z");
+  });
+
+  test("should remove favorite when tombstone is newer", () => {
+    const currentSnapshot: LibrarySnapshot = {
+      ...baseSnapshot,
+      favorites: [
+        {
+          videoId: "track-1",
+          track: trackOne,
+          createdAt: "2026-03-15T01:00:00.000Z",
+          updatedAt: "2026-03-15T01:00:00.000Z",
+        },
+      ],
+      updatedAt: "2026-03-15T01:00:00.000Z",
+    };
+
+    const merged = mergeLibraryPayload(currentSnapshot, {
+      ...toSyncedLibraryPayload(baseSnapshot),
+      updatedAt: "2026-03-15T02:00:00.000Z",
+      removedFavorites: [
+        {
+          videoId: "track-1",
+          removedAt: "2026-03-15T02:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(merged.favorites).toHaveLength(0);
+    expect(merged.removedFavorites).toHaveLength(1);
+  });
+
+  test("should keep favorite when favorite update is newer than tombstone", () => {
+    const currentSnapshot: LibrarySnapshot = {
+      ...baseSnapshot,
+      removedFavorites: [
+        {
+          videoId: "track-1",
+          removedAt: "2026-03-15T01:00:00.000Z",
+        },
+      ],
+      updatedAt: "2026-03-15T01:00:00.000Z",
+    };
+
+    const merged = mergeLibraryPayload(currentSnapshot, {
+      ...toSyncedLibraryPayload(baseSnapshot),
+      updatedAt: "2026-03-15T02:00:00.000Z",
+      favorites: [
+        {
+          videoId: "track-1",
+          track: trackOne,
+          createdAt: "2026-03-15T02:00:00.000Z",
+          updatedAt: "2026-03-15T02:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(merged.favorites).toHaveLength(1);
+    expect(merged.favorites[0]?.videoId).toBe("track-1");
+  });
+
+  test("should remove playlist when tombstone is newer", () => {
+    const currentSnapshot: LibrarySnapshot = {
+      ...baseSnapshot,
+      playlists: [
+        {
+          id: "playlist-1",
+          name: "Favorites",
+          tracks: [],
+          createdAt: "2026-03-15T01:00:00.000Z",
+          updatedAt: "2026-03-15T01:00:00.000Z",
+        },
+      ],
+      updatedAt: "2026-03-15T01:00:00.000Z",
+    };
+
+    const merged = mergeLibraryPayload(currentSnapshot, {
+      ...toSyncedLibraryPayload(baseSnapshot),
+      updatedAt: "2026-03-15T02:00:00.000Z",
+      deletedPlaylists: [
+        {
+          id: "playlist-1",
+          removedAt: "2026-03-15T02:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(merged.playlists).toHaveLength(0);
+    expect(merged.deletedPlaylists).toHaveLength(1);
+  });
+
+  test("should remove saved mix when tombstone is newer", () => {
+    const currentSnapshot: LibrarySnapshot = {
+      ...baseSnapshot,
+      savedMixes: [
+        {
+          id: "mix-1",
+          seedTrack: trackOne,
+          tracks: [trackOne],
+          createdAt: "2026-03-15T01:00:00.000Z",
+        },
+      ],
+      updatedAt: "2026-03-15T01:00:00.000Z",
+    };
+
+    const merged = mergeLibraryPayload(currentSnapshot, {
+      ...toSyncedLibraryPayload(baseSnapshot),
+      updatedAt: "2026-03-15T02:00:00.000Z",
+      deletedSavedMixes: [
+        {
+          id: "mix-1",
+          removedAt: "2026-03-15T02:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(merged.savedMixes).toHaveLength(0);
+    expect(merged.deletedSavedMixes).toHaveLength(1);
+  });
+
+  test("should not resurrect favorite after other device echoes merged snapshot", () => {
+    const preDeleteSnapshot: LibrarySnapshot = {
+      ...baseSnapshot,
+      favorites: [
+        {
+          videoId: "track-1",
+          track: trackOne,
+          createdAt: "2026-03-15T01:00:00.000Z",
+          updatedAt: "2026-03-15T01:00:00.000Z",
+        },
+      ],
+      updatedAt: "2026-03-15T01:00:00.000Z",
+    };
+
+    const deviceAAfterDelete: LibrarySnapshot = {
+      ...preDeleteSnapshot,
+      favorites: [],
+      removedFavorites: [
+        {
+          videoId: "track-1",
+          removedAt: "2026-03-15T02:00:00.000Z",
+        },
+      ],
+      updatedAt: "2026-03-15T02:00:00.000Z",
+    };
+
+    const deviceBAfterMerge = mergeLibraryPayload(
+      preDeleteSnapshot,
+      toSyncedLibraryPayload(deviceAAfterDelete),
+    );
+    expect(deviceBAfterMerge.favorites).toHaveLength(0);
+
+    const deviceAAfterEcho = mergeLibraryPayload(
+      deviceAAfterDelete,
+      toSyncedLibraryPayload(deviceBAfterMerge),
+    );
+    expect(deviceAAfterEcho.favorites).toHaveLength(0);
   });
 
   test("should project server devices into paired devices with current marker", () => {
