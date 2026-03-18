@@ -189,8 +189,26 @@ function areTracksEqual(left: Track | null, right: Track | null): boolean {
     left.artist === right.artist &&
     left.duration === right.duration &&
     left.thumbnail === right.thumbnail &&
+    areRequestersEqual(left.requestedBy, right.requestedBy) &&
     left.queueOrigin === right.queueOrigin &&
     left.radioGenerated === right.radioGenerated
+  );
+}
+
+function areRequestersEqual(
+  left: Track["requestedBy"] | undefined,
+  right: Track["requestedBy"] | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.profileId === right.profileId && left.profileName === right.profileName
   );
 }
 

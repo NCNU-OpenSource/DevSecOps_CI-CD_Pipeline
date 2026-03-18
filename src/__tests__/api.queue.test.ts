@@ -34,15 +34,14 @@ function restoreMethods(): void {
   }
 }
 
-const baseTrack: Track = {
-  videoId: "base-track",
-  title: "Base Song",
-  artist: "Base Artist",
-  duration: 180,
-  thumbnail: "https://img.youtube.com/vi/base-track/mqdefault.jpg",
+const queuedTrack: Track = {
+  videoId: "queue-track",
+  title: "Queue Song",
+  artist: "Queue Artist",
+  duration: 188,
 };
 
-describe("/api/mix", () => {
+describe("/api/queue", () => {
   beforeEach(() => {
     restoreMethods();
     __resetQueueServiceForTests();
@@ -54,7 +53,7 @@ describe("/api/mix", () => {
   });
 
   test("should reject requests without a track", async () => {
-    const response = await api.request("/mix", {
+    const response = await api.request("/queue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
@@ -67,32 +66,29 @@ describe("/api/mix", () => {
     });
   });
 
-  test("should return the created mix count", async () => {
+  test("should forward requester metadata to the queue service", async () => {
     const queueService = getQueueService();
-    let requestedBy: Track["requestedBy"] | undefined;
+    const received: {
+      track: Track | null;
+      requestedBy?: Track["requestedBy"];
+    } = {
+      track: null,
+    };
 
     stubMethod(
       queueService,
-      "createMixFromTrack",
-      (async (_track: Track, options = {}) => {
-        requestedBy = options.requestedBy;
-        return [
-          baseTrack,
-          {
-            videoId: "mix-1",
-            title: "Mix Song 1",
-            artist: "Artist 1",
-            duration: 200,
-          },
-        ];
-      }) as typeof queueService.createMixFromTrack,
+      "addToQueue",
+      (async (track: Track, options = {}) => {
+        received.track = track;
+        received.requestedBy = options.requestedBy;
+      }) as typeof queueService.addToQueue,
     );
 
-    const response = await api.request("/mix", {
+    const response = await api.request("/queue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        track: baseTrack,
+        track: queuedTrack,
         requestedBy: {
           profileId: "profile-a",
           profileName: "Alice",
@@ -101,45 +97,14 @@ describe("/api/mix", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(requestedBy).toEqual({
+    expect(received.track).toEqual(queuedTrack);
+    expect(received.requestedBy).toEqual({
       profileId: "profile-a",
       profileName: "Alice",
     });
     expect(await response.json()).toEqual({
       success: true,
-      data: {
-        message: "Added 2 tracks to queue",
-        count: 2,
-        tracks: [
-          baseTrack,
-          {
-            videoId: "mix-1",
-            title: "Mix Song 1",
-            artist: "Artist 1",
-            duration: 200,
-          },
-        ],
-      },
-    });
-  });
-
-  test("should surface service failures as 500 responses", async () => {
-    const queueService = getQueueService();
-
-    stubMethod(queueService, "createMixFromTrack", async () => {
-      throw new Error("mix failed");
-    });
-
-    const response = await api.request("/mix", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ track: baseTrack }),
-    });
-
-    expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({
-      success: false,
-      error: "Failed to create mix",
+      data: { message: "Added to queue" },
     });
   });
 });

@@ -95,6 +95,14 @@ export const MiniPlayer = () => {
                 >
                   {currentTrack.artist}
                 </p>
+                {currentTrack.requestedBy?.profileName?.trim() ? (
+                  <p
+                    className="truncate text-[11px] text-[var(--text-muted)]"
+                    title={`點歌者：${currentTrack.requestedBy.profileName}`}
+                  >
+                    點歌者：{currentTrack.requestedBy.profileName}
+                  </p>
+                ) : null}
               </div>
 
               <RadioToggleButton indicatorOnly className="hidden sm:inline-flex" />

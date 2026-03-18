@@ -79,6 +79,7 @@ describe("/api/library/playlists", () => {
     const received: {
       tracks: Track[];
       origin?: QueueOrigin;
+      requestedBy?: Track["requestedBy"];
     } = {
       tracks: [],
     };
@@ -86,21 +87,32 @@ describe("/api/library/playlists", () => {
     stubMethod(
       queueService,
       "replaceQueueWithTracks",
-      (async (tracks: Track[], origin) => {
+      (async (tracks: Track[], origin, options = {}) => {
         received.tracks = tracks;
         received.origin = origin;
+        received.requestedBy = options.requestedBy;
       }) as typeof queueService.replaceQueueWithTracks,
     );
 
     const response = await api.request("/library/playlists/test-playlist/play", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracks: playlistTracks }),
+      body: JSON.stringify({
+        tracks: playlistTracks,
+        requestedBy: {
+          profileId: "profile-a",
+          profileName: "Alice",
+        },
+      }),
     });
 
     expect(response.status).toBe(200);
     expect(received.tracks).toEqual(playlistTracks);
     expect(received.origin).toBe("playlist");
+    expect(received.requestedBy).toEqual({
+      profileId: "profile-a",
+      profileName: "Alice",
+    });
   });
 
   test("should append tracks when queueing a playlist", async () => {
@@ -108,6 +120,7 @@ describe("/api/library/playlists", () => {
     const received: {
       tracks: Track[];
       origin?: QueueOrigin;
+      requestedBy?: Track["requestedBy"];
     } = {
       tracks: [],
     };
@@ -115,21 +128,32 @@ describe("/api/library/playlists", () => {
     stubMethod(
       queueService,
       "appendTracksToQueue",
-      (async (tracks: Track[], origin) => {
+      (async (tracks: Track[], origin, options = {}) => {
         received.tracks = tracks;
         received.origin = origin;
+        received.requestedBy = options.requestedBy;
       }) as typeof queueService.appendTracksToQueue,
     );
 
     const response = await api.request("/library/playlists/test-playlist/queue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracks: playlistTracks }),
+      body: JSON.stringify({
+        tracks: playlistTracks,
+        requestedBy: {
+          profileId: "profile-b",
+          profileName: "Bob",
+        },
+      }),
     });
 
     expect(response.status).toBe(200);
     expect(received.tracks).toEqual(playlistTracks);
     expect(received.origin).toBe("playlist");
+    expect(received.requestedBy).toEqual({
+      profileId: "profile-b",
+      profileName: "Bob",
+    });
   });
 
   test("should surface playlist queue failures as 500 responses", async () => {

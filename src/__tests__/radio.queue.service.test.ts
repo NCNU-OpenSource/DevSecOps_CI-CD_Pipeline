@@ -162,4 +162,42 @@ describe("QueueService radio mode", () => {
     ]);
     expect(queueService.getQueue()[0]?.queueOrigin).toBe("manual");
   });
+
+  test("should keep radio-generated tracks anonymous", async () => {
+    const queueService = getQueueService();
+    const playerService = getPlayerService();
+    const musicService = getMusicService();
+
+    stubMethod(playerService, "isCurrentlyPlaying", () => false);
+    stubMethod(playerService, "play", async () => {
+      throw new Error("play() should not be used when playUrl() succeeds");
+    });
+    stubMethod(playerService, "playUrl", async () => {});
+    stubMethod(musicService, "getMixTracks", async () => radioTracks);
+    stubMethod(musicService, "getStreamUrl", async (videoId: string) => {
+      return {
+        url: `https://stream/${videoId}`,
+        source: "youtube-ext" as const,
+      };
+    });
+    stubMethod(musicService, "getLyrics", async () => []);
+
+    await queueService.addToQueue({
+      ...baseTrack,
+      requestedBy: {
+        profileId: "profile-radio",
+        profileName: "Radio Starter",
+      },
+    });
+    queueService.enableRadio();
+    await queueService.playNext();
+
+    const state = queueService.getState();
+    expect(state.lastPlayedTrack?.requestedBy).toEqual({
+      profileId: "profile-radio",
+      profileName: "Radio Starter",
+    });
+    expect(state.currentTrack?.requestedBy).toBeUndefined();
+    expect(queueService.getQueue()[0]?.requestedBy).toBeUndefined();
+  });
 });

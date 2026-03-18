@@ -12,7 +12,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/components/ui/toast";
 import { usePlayerStore } from "@/stores/playerStore";
-import { useLibraryStore } from "@/stores/libraryStore";
+import { getCurrentRequester, useLibraryStore } from "@/stores/libraryStore";
 import { api } from "@/services/api";
 import type { Track } from "@/types";
 import { X } from "lucide-react";
@@ -31,6 +31,9 @@ export const SearchModal = ({ open, onOpenChange }: SearchModalProps) => {
   const setSearchResults = usePlayerStore((state) => state.setSearchResults);
   const openPlaylistPicker = useLibraryStore((state) => state.openPlaylistPicker);
   const saveMix = useLibraryStore((state) => state.saveMix);
+  const currentRequester = useLibraryStore((state) =>
+    getCurrentRequester(state.snapshot),
+  );
   const { showToast } = useToast();
 
   const handleSearch = async (query: string) => {
@@ -61,7 +64,7 @@ export const SearchModal = ({ open, onOpenChange }: SearchModalProps) => {
       .setLoadingTrack(true, `正在載入「${track.title}」...`);
 
     try {
-      const response = await api.addToQueue(track);
+      const response = await api.addToQueue(track, currentRequester);
       if (response.success) {
         showToast({ message: "已加入播放佇列", type: "success" });
         // 保持 Modal 開啟，不調用 onOpenChange(false)
@@ -85,7 +88,7 @@ export const SearchModal = ({ open, onOpenChange }: SearchModalProps) => {
     usePlayerStore.getState().setLoadingTrack(true, "正在取得推薦歌曲...");
 
     try {
-      const response = await api.createMix(track);
+      const response = await api.createMix(track, currentRequester);
       if (response.success && response.data) {
         void saveMix(track, response.data.tracks);
         showToast({

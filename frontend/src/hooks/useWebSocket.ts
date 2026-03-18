@@ -36,12 +36,25 @@ export const useWebSocket = () => {
             message.state.currentTrack === null &&
             message.state.queue.length > 0 &&
             previousState.currentTrack !== null;
+          const queueHead = message.state.queue[0] ?? null;
+          const mergedPreservedTrack =
+            shouldPreserveCurrentTrack &&
+            queueHead &&
+            previousState.currentTrack &&
+            queueHead.videoId === previousState.currentTrack.videoId
+              ? {
+                  ...previousState.currentTrack,
+                  requestedBy:
+                    queueHead.requestedBy ??
+                    previousState.currentTrack.requestedBy,
+                }
+              : previousState.currentTrack;
 
           setPlaybackState(
             shouldPreserveCurrentTrack
               ? {
                   ...message.state,
-                  currentTrack: previousState.currentTrack,
+                  currentTrack: mergedPreservedTrack,
                   position:
                     message.state.position > 0
                       ? message.state.position

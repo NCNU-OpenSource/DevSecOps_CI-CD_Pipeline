@@ -51,6 +51,8 @@ export const QueueItem = ({
   onTouchEnd,
   onTouchCancel,
 }: QueueItemProps) => {
+  const requesterLabel = track.requestedBy?.profileName?.trim() || null;
+
   return (
     <div
       data-queue-item-index={index}
@@ -167,6 +169,17 @@ export const QueueItem = ({
           >
             {track.artist} • {formatTime(track.duration)}
           </p>
+          {requesterLabel ? (
+            <p
+              className={cn(
+                "mt-1 truncate text-[var(--text-muted)]",
+                mobile ? "text-xs leading-5" : "text-[11px]",
+              )}
+              title={`點歌者：${requesterLabel}`}
+            >
+              點歌者：{requesterLabel}
+            </p>
+          ) : null}
         </div>
         <div
           className={cn(

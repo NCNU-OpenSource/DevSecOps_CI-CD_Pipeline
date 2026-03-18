@@ -1,5 +1,10 @@
 import type { ApiResponse, Track } from "@/types";
-import type { SyncSessionResponse } from "@/types/library";
+import type {
+  SyncDeviceMetadata,
+  SyncProfileResponse,
+  SyncSessionDevice,
+  SyncSessionResponse,
+} from "@/types/library";
 
 export interface SystemInfoResponse {
   appVersion: string;
@@ -9,6 +14,16 @@ export interface SystemInfoResponse {
 }
 
 const API_BASE = "/api";
+
+type RequestedByPayload = Track["requestedBy"];
+
+type SyncDevicePayload = {
+  id: string;
+  name?: string | null;
+  reportedName?: string | null;
+  kind: "desktop" | "mobile";
+  metadata?: SyncDeviceMetadata | null;
+};
 
 class ApiService {
   private async request<T>(
@@ -61,20 +76,24 @@ class ApiService {
   }
 
   // 加入到佇列
-  async addToQueue(track: Track): Promise<ApiResponse<void>> {
-    return this.request<void>("/queue", {
+  async addToQueue(
+    track: Track,
+    requestedBy?: RequestedByPayload,
+  ): Promise<ApiResponse<{ message: string }>> {
+    return this.request<{ message: string }>("/queue", {
       method: "POST",
-      body: JSON.stringify({ track }),
+      body: JSON.stringify({ track, requestedBy }),
     });
   }
 
   // 創建 Mix 混合播放清單
   async createMix(
     track: Track,
+    requestedBy?: RequestedByPayload,
   ): Promise<ApiResponse<{ count: number; tracks: Track[] }>> {
     return this.request<{ count: number; tracks: Track[] }>("/mix", {
       method: "POST",
-      body: JSON.stringify({ track }),
+      body: JSON.stringify({ track, requestedBy }),
     });
   }
 
@@ -140,32 +159,37 @@ class ApiService {
   async playPlaylist(
     playlistId: string,
     tracks: Track[],
-  ): Promise<ApiResponse<void>> {
-    return this.request<void>(`/library/playlists/${playlistId}/play`, {
-      method: "POST",
-      body: JSON.stringify({ tracks }),
-    });
+    requestedBy?: RequestedByPayload,
+  ): Promise<ApiResponse<{ message: string }>> {
+    return this.request<{ message: string }>(
+      `/library/playlists/${playlistId}/play`,
+      {
+        method: "POST",
+        body: JSON.stringify({ tracks, requestedBy }),
+      },
+    );
   }
 
   async queuePlaylist(
     playlistId: string,
     tracks: Track[],
-  ): Promise<ApiResponse<void>> {
-    return this.request<void>(`/library/playlists/${playlistId}/queue`, {
-      method: "POST",
-      body: JSON.stringify({ tracks }),
-    });
+    requestedBy?: RequestedByPayload,
+  ): Promise<ApiResponse<{ message: string }>> {
+    return this.request<{ message: string }>(
+      `/library/playlists/${playlistId}/queue`,
+      {
+        method: "POST",
+        body: JSON.stringify({ tracks, requestedBy }),
+      },
+    );
   }
 
   async createSyncSession(payload: {
     sessionId?: string | null;
     deviceToken?: string | null;
     profileId: string;
-    device: {
-      id: string;
-      name: string;
-      kind: "desktop" | "mobile";
-    };
+    profileName?: string | null;
+    device: SyncDevicePayload;
   }): Promise<ApiResponse<SyncSessionResponse>> {
     return this.request<SyncSessionResponse>("/sync/session", {
       method: "POST",
@@ -176,11 +200,7 @@ class ApiService {
   async pairSyncSession(payload: {
     pairCode: string;
     profileId: string;
-    device: {
-      id: string;
-      name: string;
-      kind: "desktop" | "mobile";
-    };
+    device: SyncDevicePayload;
   }): Promise<ApiResponse<SyncSessionResponse>> {
     return this.request<SyncSessionResponse>("/sync/pair", {
       method: "POST",
@@ -193,6 +213,30 @@ class ApiService {
   ): Promise<ApiResponse<{ devices: SyncSessionResponse["devices"] }>> {
     return this.request<{ devices: SyncSessionResponse["devices"] }>(
       `/sync/devices?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+  }
+
+  async updateSyncProfileName(
+    sessionId: string,
+    profileName: string,
+  ): Promise<ApiResponse<SyncProfileResponse>> {
+    return this.request<SyncProfileResponse>("/sync/session/profile", {
+      method: "PATCH",
+      body: JSON.stringify({ sessionId, profileName }),
+    });
+  }
+
+  async renameSyncDevice(
+    sessionId: string,
+    deviceId: string,
+    name: string,
+  ): Promise<ApiResponse<{ devices: SyncSessionDevice[] }>> {
+    return this.request<{ devices: SyncSessionDevice[] }>(
+      `/sync/devices/${encodeURIComponent(deviceId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ sessionId, name }),
+      },
     );
   }
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/services/api";
 import { useLibraryStore, getCurrentDevice } from "@/stores/libraryStore";
+import { detectDeviceInfo } from "@/utils/device-info";
 import { toSyncedLibraryPayload } from "@/utils/librarySync";
 import type { SyncSessionDevice, SyncedLibraryPayload } from "@/types/library";
 
@@ -24,6 +25,8 @@ export function useLibrarySync(): void {
   const setSyncStatus = useLibraryStore((state) => state.setSyncStatus);
   const applySyncSession = useLibraryStore((state) => state.applySyncSession);
   const updatePairedDevices = useLibraryStore((state) => state.updatePairedDevices);
+  const updateProfileName = useLibraryStore((state) => state.updateProfileName);
+  const refreshCurrentDevice = useLibraryStore((state) => state.refreshCurrentDevice);
   const mergeRemoteSnapshot = useLibraryStore((state) => state.mergeRemoteSnapshot);
   const removeSyncSession = useLibraryStore((state) => state.removeSyncSession);
 
@@ -37,9 +40,8 @@ export function useLibrarySync(): void {
 
   const currentDevice = getCurrentDevice(snapshot);
   const currentDeviceId = currentDevice?.id ?? null;
-  const currentDeviceName = currentDevice?.name ?? null;
-  const currentDeviceKind = currentDevice?.kind ?? null;
   const snapshotProfileId = snapshot?.profileId ?? "";
+  const snapshotProfileName = snapshot?.profileName ?? "未命名使用者";
   const snapshotSessionId = snapshot?.syncSessionId ?? null;
   const snapshotDeviceToken = snapshot?.syncDeviceToken ?? null;
 
@@ -76,9 +78,7 @@ export function useLibrarySync(): void {
     if (
       !ready ||
       !snapshot ||
-      !currentDeviceId ||
-      !currentDeviceName ||
-      !currentDeviceKind
+      !currentDeviceId
     ) {
       return;
     }
@@ -87,23 +87,35 @@ export function useLibrarySync(): void {
     const deviceToken = snapshotDeviceToken;
     const profileId = snapshotProfileId;
     const deviceId = currentDeviceId;
-    const deviceName = currentDeviceName;
-    const deviceKind = currentDeviceKind;
     const recoveryKey = `${sessionId ?? "new"}:${deviceId}:${deviceToken ?? "none"}`;
 
     let cancelled = false;
 
     async function bootstrapSyncSession() {
       setSyncStatus("connecting", { error: null });
+      const runtimeDevice = await detectDeviceInfo();
+
+      if (cancelled) {
+        return;
+      }
+
+      await refreshCurrentDevice({
+        kind: runtimeDevice.kind,
+        reportedName: runtimeDevice.reportedName,
+        metadata: runtimeDevice.metadata,
+      });
 
       const response = await api.createSyncSession({
         sessionId,
         deviceToken,
         profileId,
+        profileName: snapshotProfileName,
         device: {
           id: deviceId,
-          name: deviceName,
-          kind: deviceKind,
+          name: runtimeDevice.legacyName,
+          kind: runtimeDevice.kind,
+          reportedName: runtimeDevice.reportedName,
+          metadata: runtimeDevice.metadata,
         },
       });
 
@@ -137,6 +149,9 @@ export function useLibrarySync(): void {
       await applySyncSession({
         ...response.data,
         pairCode: response.data.pairCode,
+        profileName:
+          String((response.data as { profileName?: unknown }).profileName ?? "").trim() ||
+          snapshotProfileName,
       });
     }
 
@@ -148,11 +163,11 @@ export function useLibrarySync(): void {
   }, [
     applySyncSession,
     currentDeviceId,
-    currentDeviceKind,
-    currentDeviceName,
     ready,
+    refreshCurrentDevice,
     removeSyncSession,
     setSyncStatus,
+    snapshotProfileName,
     snapshot?.profileId,
     snapshot?.syncDeviceToken,
     snapshot?.syncSessionId,
@@ -163,9 +178,7 @@ export function useLibrarySync(): void {
       !ready ||
       !snapshotSessionId ||
       !snapshotDeviceToken ||
-      !currentDeviceId ||
-      !currentDeviceName ||
-      !currentDeviceKind
+      !currentDeviceId
     ) {
       return;
     }
@@ -177,16 +190,36 @@ export function useLibrarySync(): void {
 
     ws.onopen = () => {
       reconnectAttemptsRef.current = 0;
-      ws.send(
-        JSON.stringify({
-          type: "sync_register",
-          sessionId: snapshotSessionId,
-          deviceId: currentDeviceId,
-          deviceName: currentDeviceName,
-          deviceKind: currentDeviceKind,
-          deviceToken: snapshotDeviceToken,
-        }),
-      );
+
+      void (async () => {
+        const runtimeDevice = await detectDeviceInfo();
+        if (closedIntentionally || ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        await refreshCurrentDevice({
+          kind: runtimeDevice.kind,
+          reportedName: runtimeDevice.reportedName,
+          metadata: runtimeDevice.metadata,
+        });
+
+        if (closedIntentionally || ws.readyState !== WebSocket.OPEN) {
+          return;
+        }
+
+        ws.send(
+          JSON.stringify({
+            type: "sync_register",
+            sessionId: snapshotSessionId,
+            deviceId: currentDeviceId,
+            deviceName: runtimeDevice.legacyName,
+            deviceKind: runtimeDevice.kind,
+            deviceToken: snapshotDeviceToken,
+            reportedName: runtimeDevice.reportedName,
+            deviceMetadata: runtimeDevice.metadata,
+          }),
+        );
+      })();
     };
 
     ws.onmessage = (event) => {
@@ -200,6 +233,9 @@ export function useLibrarySync(): void {
               sessionId: String(message.sessionId ?? ""),
               pairCode: String(message.pairCode ?? ""),
               profileId: String(message.profileId ?? snapshotProfileId ?? ""),
+              profileName:
+                String(message.profileName ?? snapshotProfileName ?? "").trim() ||
+                "未命名使用者",
               deviceToken: String(
                 message.deviceToken ?? snapshotDeviceToken ?? "",
               ),
@@ -237,6 +273,13 @@ export function useLibrarySync(): void {
                 error: "此裝置已被移出同步 session，請重新配對",
               });
             });
+            break;
+
+          case "sync_profile_updated":
+            void updateProfileName(
+              String(message.profileName ?? snapshotProfileName ?? "").trim() ||
+                "未命名使用者",
+            );
             break;
 
           case "sync_error":
@@ -296,16 +339,17 @@ export function useLibrarySync(): void {
   }, [
     applySyncSession,
     currentDeviceId,
-    currentDeviceKind,
-    currentDeviceName,
     mergeRemoteSnapshot,
     ready,
+    refreshCurrentDevice,
     removeSyncSession,
     setSyncStatus,
     snapshotDeviceToken,
     snapshotProfileId,
+    snapshotProfileName,
     snapshotSessionId,
     socketAttempt,
+    updateProfileName,
     updatePairedDevices,
   ]);
 

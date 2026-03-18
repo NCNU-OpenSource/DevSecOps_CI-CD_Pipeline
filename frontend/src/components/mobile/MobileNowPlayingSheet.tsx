@@ -38,6 +38,7 @@ export const MobileNowPlayingSheet = () => {
   const isFavorite = currentTrack
     ? favorites.some((favorite) => favorite.videoId === currentTrack.videoId)
     : false;
+  const requesterLabel = currentTrack?.requestedBy?.profileName?.trim() || null;
 
   const handleFavorite = async () => {
     if (!currentTrack || !libraryReady) {
@@ -138,6 +139,14 @@ export const MobileNowPlayingSheet = () => {
                       >
                         {currentTrack.artist}
                       </p>
+                      {requesterLabel ? (
+                        <p
+                          className="line-clamp-1 text-sm text-[var(--text-muted)]"
+                          title={`點歌者：${requesterLabel}`}
+                        >
+                          點歌者：{requesterLabel}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -206,6 +215,14 @@ export const MobileNowPlayingSheet = () => {
                   >
                     {currentTrack.artist}
                   </p>
+                  {requesterLabel ? (
+                    <p
+                      className="truncate text-xs text-[var(--text-muted)]"
+                      title={`點歌者：${requesterLabel}`}
+                    >
+                      點歌者：{requesterLabel}
+                    </p>
+                  ) : null}
                 </div>
               </div>
 

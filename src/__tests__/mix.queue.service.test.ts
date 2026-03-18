@@ -196,6 +196,46 @@ describe("QueueService mix creation", () => {
     );
   });
 
+  test("should stamp requester metadata onto mix-created tracks", async () => {
+    const queueService = getQueueService();
+    const playerService = getPlayerService();
+    const musicService = getMusicService();
+
+    stubMethod(playerService, "stop", async () => {});
+    stubMethod(playerService, "isCurrentlyPlaying", () => false);
+    stubMethod(playerService, "play", async () => {
+      throw new Error("play() should not be used when playUrl() succeeds");
+    });
+    stubMethod(playerService, "playUrl", async () => {});
+    stubMethod(musicService, "getMixTracks", async () => mixTracks);
+    stubMethod(musicService, "getStreamUrl", async () => {
+      return { url: "https://stream/base-track", source: "yt-dlp" as const };
+    });
+    stubMethod(musicService, "getLyrics", async () => []);
+
+    const tracks = await queueService.createMixFromTrack(baseTrack, {
+      requestedBy: {
+        profileId: "profile-mix",
+        profileName: "Mix Master",
+      },
+    });
+    const state = queueService.getState();
+
+    expect(tracks.map((track) => track.requestedBy)).toEqual([
+      { profileId: "profile-mix", profileName: "Mix Master" },
+      { profileId: "profile-mix", profileName: "Mix Master" },
+      { profileId: "profile-mix", profileName: "Mix Master" },
+    ]);
+    expect(state.currentTrack?.requestedBy).toEqual({
+      profileId: "profile-mix",
+      profileName: "Mix Master",
+    });
+    expect(queueService.getQueue().map((track) => track.requestedBy)).toEqual([
+      { profileId: "profile-mix", profileName: "Mix Master" },
+      { profileId: "profile-mix", profileName: "Mix Master" },
+    ]);
+  });
+
   test("should fall back to the base track when fetching mix tracks fails", async () => {
     const queueService = getQueueService();
     const playerService = getPlayerService();

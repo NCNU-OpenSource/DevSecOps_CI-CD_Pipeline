@@ -142,6 +142,14 @@ export const PlayerSection = ({
                         >
                           {nextTrack.artist}
                         </p>
+                        {nextTrack.requestedBy?.profileName?.trim() ? (
+                          <p
+                            className="truncate text-xs text-[var(--text-muted)]"
+                            title={`點歌者：${nextTrack.requestedBy.profileName}`}
+                          >
+                            點歌者：{nextTrack.requestedBy.profileName}
+                          </p>
+                        ) : null}
                       </div>
                       <span className="shrink-0 rounded-full border border-[color:var(--dynamic-ring)] bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--text-primary)]">
                         {formatTime(nextTrack.duration)}

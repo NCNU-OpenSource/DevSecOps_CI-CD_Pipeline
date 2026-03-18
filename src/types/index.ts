@@ -1,5 +1,10 @@
 export type QueueOrigin = "manual" | "mix" | "radio" | "playlist";
 
+export interface TrackRequester {
+  profileId: string;
+  profileName: string;
+}
+
 // 歌曲資訊
 export interface Track {
   videoId: string;
@@ -7,6 +12,7 @@ export interface Track {
   artist: string;
   duration: number; // 秒
   thumbnail?: string;
+  requestedBy?: TrackRequester;
   queueOrigin?: QueueOrigin;
   radioGenerated?: boolean;
 }

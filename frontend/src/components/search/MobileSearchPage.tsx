@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/components/ui/toast";
 import { usePlayerStore } from "@/stores/playerStore";
+import { getCurrentRequester, useLibraryStore } from "@/stores/libraryStore";
 import { api } from "@/services/api";
 import { formatTime } from "@/utils/format";
 import type { Track } from "@/types";
@@ -28,6 +29,9 @@ export const MobileSearchPage = () => {
   );
   const searchResults = usePlayerStore((state) => state.searchResults);
   const setSearchResults = usePlayerStore((state) => state.setSearchResults);
+  const currentRequester = useLibraryStore((state) =>
+    getCurrentRequester(state.snapshot),
+  );
   const { showToast } = useToast();
 
   // 自動聚焦輸入框
@@ -80,7 +84,7 @@ export const MobileSearchPage = () => {
       .setLoadingTrack(true, `正在載入「${track.title}」...`);
 
     try {
-      const response = await api.addToQueue(track);
+      const response = await api.addToQueue(track, currentRequester);
       if (response.success) {
         showToast({ message: "已加入播放佇列", type: "success" });
       } else {

@@ -1,5 +1,16 @@
 import type { Track } from "./index";
 
+export type SyncDeviceKind = "desktop" | "mobile";
+
+export interface SyncDeviceMetadata {
+  platformFamily?: string | null;
+  platformVersion?: string | null;
+  architecture?: string | null;
+  browserName?: string | null;
+  browserVersion?: string | null;
+  model?: string | null;
+}
+
 export interface FavoriteTrack {
   videoId: string;
   track: Track;
@@ -51,8 +62,12 @@ export interface DeletedPlaylist {
 
 export interface PairedDevice {
   id: string;
-  name: string;
-  kind: "desktop" | "mobile";
+  name: string; // Legacy alias of displayName for compatibility
+  reportedName: string;
+  customName: string | null;
+  displayName: string;
+  kind: SyncDeviceKind;
+  metadata: SyncDeviceMetadata | null;
   pairedAt: string;
   isCurrentDevice: boolean;
   status: "available" | "coming_soon";
@@ -62,6 +77,7 @@ export interface PairedDevice {
 
 export interface LibrarySnapshot {
   profileId: string;
+  profileName: string;
   deviceId: string;
   updatedAt: string;
   syncSessionId: string | null;
@@ -78,6 +94,7 @@ export interface LibrarySnapshot {
 
 export interface SyncedLibraryPayload {
   profileId: string;
+  profileName?: string;
   updatedAt: string;
   syncSessionId: string | null;
   favorites: FavoriteTrack[];
@@ -91,8 +108,12 @@ export interface SyncedLibraryPayload {
 
 export interface SyncSessionDevice {
   id: string;
-  name: string;
-  kind: "desktop" | "mobile";
+  name: string; // Legacy alias of displayName for compatibility
+  reportedName: string;
+  customName: string | null;
+  displayName: string;
+  kind: SyncDeviceKind;
+  metadata: SyncDeviceMetadata | null;
   connected: boolean;
   pairedAt: string;
   lastSeenAt: string;
@@ -102,6 +123,13 @@ export interface SyncSessionResponse {
   sessionId: string;
   pairCode: string;
   profileId: string;
+  profileName: string;
   deviceToken: string;
   devices: SyncSessionDevice[];
+}
+
+export interface SyncProfileResponse {
+  sessionId: string;
+  profileId: string;
+  profileName: string;
 }

@@ -8,6 +8,7 @@ import type {
   Playlist,
   RemovedFavorite,
   SavedMix,
+  SyncDeviceMetadata,
   SyncSessionDevice,
   SyncedLibraryPayload,
 } from "../types/library";
@@ -122,6 +123,7 @@ export function toSyncedLibraryPayload(
 ): SyncedLibraryPayload {
   return {
     profileId: snapshot.profileId,
+    profileName: snapshot.profileName,
     updatedAt: snapshot.updatedAt,
     syncSessionId: snapshot.syncSessionId,
     favorites: snapshot.favorites,
@@ -223,6 +225,11 @@ export function mergeLibraryPayload(
   return {
     ...currentSnapshot,
     profileId: currentSnapshot.profileId || incomingPayload.profileId,
+    profileName:
+      (incomingPayload.profileName &&
+      incomingPayload.profileName.trim().length > 0
+        ? incomingPayload.profileName
+        : currentSnapshot.profileName) || "未命名使用者",
     syncSessionId: incomingPayload.syncSessionId ?? currentSnapshot.syncSessionId,
     updatedAt:
       currentSnapshot.updatedAt >= incomingPayload.updatedAt
@@ -238,6 +245,25 @@ export function mergeLibraryPayload(
   };
 }
 
+function normalizeMetadata(
+  incoming: SyncDeviceMetadata | null | undefined,
+  existing: SyncDeviceMetadata | null | undefined,
+): SyncDeviceMetadata | null {
+  const candidate = incoming ?? existing;
+  if (!candidate) {
+    return null;
+  }
+
+  return {
+    platformFamily: candidate.platformFamily ?? null,
+    platformVersion: candidate.platformVersion ?? null,
+    architecture: candidate.architecture ?? null,
+    browserName: candidate.browserName ?? null,
+    browserVersion: candidate.browserVersion ?? null,
+    model: candidate.model ?? null,
+  };
+}
+
 export function mergePairedDevices(
   currentDeviceId: string,
   existingDevices: PairedDevice[],
@@ -247,11 +273,21 @@ export function mergePairedDevices(
 
   return sessionDevices.map((device) => {
     const existing = existingById.get(device.id);
+    const reportedName =
+      device.reportedName || existing?.reportedName || device.displayName || device.name;
+    const customName = device.customName ?? existing?.customName ?? null;
+    const displayName =
+      device.displayName || customName || reportedName || existing?.displayName || "Unknown";
+    const metadata = normalizeMetadata(device.metadata, existing?.metadata);
 
     return {
       id: device.id,
-      name: device.name,
+      name: displayName,
+      reportedName,
+      customName,
+      displayName,
       kind: device.kind,
+      metadata,
       pairedAt: existing?.pairedAt ?? device.pairedAt,
       isCurrentDevice: device.id === currentDeviceId,
       status: "available",

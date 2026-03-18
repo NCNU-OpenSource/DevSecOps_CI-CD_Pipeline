@@ -210,13 +210,19 @@ class QueueService {
   /**
    * 加入歌曲到播放清單
    */
-  async addToQueue(track: Track): Promise<void> {
-    this.insertManualTracks([track]);
+  async addToQueue(
+    track: Track,
+    options: { requestedBy?: Track["requestedBy"] } = {},
+  ): Promise<void> {
+    const requester = this.resolveRequester(options.requestedBy, track);
+    const normalizedTrack = this.withRequester(track, requester);
+    this.insertManualTracks([normalizedTrack]);
 
     log.info("Added to queue", {
-      videoId: track.videoId,
-      title: track.title,
-      artist: track.artist,
+      videoId: normalizedTrack.videoId,
+      title: normalizedTrack.title,
+      artist: normalizedTrack.artist,
+      requestedBy: normalizedTrack.requestedBy?.profileId ?? null,
     });
     this.broadcastQueueChange();
 
@@ -245,8 +251,17 @@ class QueueService {
    * 創建混合播放清單
    * 清空佇列，立即開始播放 Mix
    */
-  async createMixFromTrack(baseTrack: Track): Promise<Track[]> {
-    log.info("Creating mix", { baseTrack: baseTrack.title });
+  async createMixFromTrack(
+    baseTrack: Track,
+    options: { requestedBy?: Track["requestedBy"] } = {},
+  ): Promise<Track[]> {
+    const requester = this.resolveRequester(options.requestedBy, baseTrack);
+    const normalizedBaseTrack = this.withRequester(baseTrack, requester);
+
+    log.info("Creating mix", {
+      baseTrack: normalizedBaseTrack.title,
+      requestedBy: normalizedBaseTrack.requestedBy?.profileId ?? null,
+    });
     const mixRequestId = ++this.mixRequestId;
 
     // 停止當前播放
@@ -262,7 +277,7 @@ class QueueService {
     this.broadcastState();
 
     // 先加入基礎歌曲
-    this.queue.push(this.withOrigin(baseTrack, "mix"));
+    this.queue.push(this.withOrigin(normalizedBaseTrack, "mix"));
 
     log.info("Mix created, starting playback", {
       addedTracks: this.queue.length,
@@ -275,20 +290,26 @@ class QueueService {
     // 再背景補上推薦歌曲。
     let mixTracks: Track[] = [];
     try {
-      mixTracks = await getMusicService().getMixTracks(baseTrack.videoId, 10);
+      mixTracks = await getMusicService().getMixTracks(
+        normalizedBaseTrack.videoId,
+        10,
+      );
 
       // 如果期間又建立了新的 mix，就丟棄舊結果避免污染 queue。
       if (mixRequestId !== this.mixRequestId) {
         log.info("Discarding stale mix tracks", {
-          baseTrack: baseTrack.title,
+          baseTrack: normalizedBaseTrack.title,
           mixRequestId,
           currentMixRequestId: this.mixRequestId,
         });
-        return [baseTrack];
+        return [normalizedBaseTrack];
       }
 
       if (mixTracks.length > 0) {
-        this.queue.push(...mixTracks.map((track) => this.withOrigin(track, "mix")));
+        const normalizedMixTracks = mixTracks.map((track) =>
+          this.withOrigin(this.withRequester(track, requester), "mix"),
+        );
+        this.queue.push(...normalizedMixTracks);
         this.broadcastQueueChange();
 
         // 若 base song 已結束且播放器空閒，補上的 mix 要能自動接續播放。
@@ -300,7 +321,10 @@ class QueueService {
       log.warn("Failed to get mix tracks, playing base track only", { error });
     }
 
-    return [baseTrack, ...mixTracks];
+    return [
+      normalizedBaseTrack,
+      ...mixTracks.map((track) => this.withRequester(track, requester)),
+    ];
   }
 
   /**
@@ -605,10 +629,14 @@ class QueueService {
   async replaceQueueWithTracks(
     tracks: Track[],
     origin: QueueOrigin = "playlist",
+    options: { requestedBy?: Track["requestedBy"] } = {},
   ): Promise<void> {
     await getPlayerService().stop();
+    const requester = this.resolveRequester(options.requestedBy, null, tracks);
 
-    this.queue = tracks.map((track) => this.withOrigin(track, origin));
+    this.queue = tracks.map((track) =>
+      this.withOrigin(this.withRequester(track, requester), origin),
+    );
     this.currentTrack = null;
     this.currentPosition = 0;
     this.currentDuration = 0;
@@ -625,13 +653,17 @@ class QueueService {
   async appendTracksToQueue(
     tracks: Track[],
     origin: QueueOrigin = "playlist",
+    options: { requestedBy?: Track["requestedBy"] } = {},
   ): Promise<void> {
     if (tracks.length === 0) {
       return;
     }
+    const requester = this.resolveRequester(options.requestedBy, null, tracks);
 
     this.insertManualTracks(
-      tracks.map((track) => this.withOrigin(track, origin)),
+      tracks.map((track) =>
+        this.withOrigin(this.withRequester(track, requester), origin),
+      ),
       origin === "manual" || origin === "playlist",
     );
     this.broadcastQueueChange();
@@ -646,6 +678,60 @@ class QueueService {
     }
 
     this.maybeHydrateRadioQueue();
+  }
+
+  renameRequesterProfile(profileId: string, profileName: string): void {
+    const normalizedProfileId = profileId.trim();
+    const normalizedProfileName = profileName.trim();
+
+    if (!normalizedProfileId || !normalizedProfileName) {
+      return;
+    }
+
+    let didChange = false;
+
+    const renamedQueue = this.queue.map((track) => {
+      const nextTrack =
+        this.withRenamedRequester(
+        track,
+        normalizedProfileId,
+        normalizedProfileName,
+        ) ?? track;
+
+      if (nextTrack !== track) {
+        didChange = true;
+      }
+
+      return nextTrack;
+    });
+    const renamedCurrentTrack = this.withRenamedRequester(
+      this.currentTrack,
+      normalizedProfileId,
+      normalizedProfileName,
+    );
+    const renamedLastPlayedTrack = this.withRenamedRequester(
+      this.lastPlayedTrack,
+      normalizedProfileId,
+      normalizedProfileName,
+    );
+
+    if (renamedCurrentTrack !== this.currentTrack) {
+      didChange = true;
+    }
+
+    if (renamedLastPlayedTrack !== this.lastPlayedTrack) {
+      didChange = true;
+    }
+
+    if (!didChange) {
+      return;
+    }
+
+    this.queue = renamedQueue;
+    this.currentTrack = renamedCurrentTrack;
+    this.lastPlayedTrack = renamedLastPlayedTrack;
+    this.broadcastQueueChange();
+    this.broadcastState();
   }
 
   /**
@@ -718,6 +804,72 @@ class QueueService {
       queueOrigin: origin,
       radioGenerated: origin === "radio",
     };
+  }
+
+  private withRequester(
+    track: Track,
+    requestedBy?: Track["requestedBy"],
+  ): Track {
+    if (!isValidRequester(requestedBy)) {
+      return track;
+    }
+
+    if (
+      track.requestedBy?.profileId === requestedBy.profileId &&
+      track.requestedBy.profileName === requestedBy.profileName
+    ) {
+      return track;
+    }
+
+    return {
+      ...track,
+      requestedBy,
+    };
+  }
+
+  private withRenamedRequester(
+    track: Track | null,
+    profileId: string,
+    profileName: string,
+  ): Track | null {
+    if (
+      !track?.requestedBy ||
+      track.requestedBy.profileId !== profileId ||
+      track.requestedBy.profileName === profileName
+    ) {
+      return track;
+    }
+
+    return {
+      ...track,
+      requestedBy: {
+        ...track.requestedBy,
+        profileName,
+      },
+    };
+  }
+
+  private resolveRequester(
+    requestedBy?: Track["requestedBy"],
+    sourceTrack: Track | null = null,
+    sourceTracks: Track[] = [],
+  ): Track["requestedBy"] | undefined {
+    if (isValidRequester(requestedBy)) {
+      return requestedBy;
+    }
+
+    const sourceRequester = sourceTrack?.requestedBy;
+    if (isValidRequester(sourceRequester)) {
+      return sourceRequester;
+    }
+
+    for (const track of sourceTracks) {
+      if (isValidRequester(track.requestedBy)) {
+        return track.requestedBy;
+      }
+    }
+
+    return undefined;
   }
 
   private insertManualTracks(
@@ -851,6 +1003,14 @@ function isSameProgress(
     left.position === right.position &&
     left.duration === right.duration &&
     left.isPlaying === right.isPlaying
+  );
+}
+
+function isValidRequester(
+  requestedBy: Track["requestedBy"] | undefined,
+): requestedBy is NonNullable<Track["requestedBy"]> {
+  return Boolean(
+    requestedBy?.profileId?.trim() && requestedBy.profileName?.trim(),
   );
 }
 

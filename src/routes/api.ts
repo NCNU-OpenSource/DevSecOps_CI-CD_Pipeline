@@ -4,6 +4,7 @@ import { getMusicService } from "../services/music.service.ts";
 import { getQueueService } from "../services/queue.service.ts";
 import {
   getSyncService,
+  type SyncDeviceInput,
   SyncServiceError,
 } from "../services/sync.service.ts";
 import { getAppMetadata } from "../utils/app-metadata.ts";
@@ -17,16 +18,90 @@ const api = new Hono();
 
 type SyncDeviceRequest = {
   id: string;
-  name: string;
+  name?: string | null;
+  reportedName?: string | null;
   kind: "desktop" | "mobile";
+  metadata?: {
+    platformFamily?: string | null;
+    platformVersion?: string | null;
+    architecture?: string | null;
+    browserName?: string | null;
+    browserVersion?: string | null;
+    model?: string | null;
+  } | null;
 };
+
+function normalizeText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function parseSyncDevice(device: SyncDeviceRequest | null | undefined): SyncDeviceInput | null {
+  if (!device) {
+    return null;
+  }
+
+  const id = normalizeText(device.id);
+  const reportedName = normalizeText(device.reportedName);
+  const legacyName = normalizeText(device.name);
+
+  if (!id || (!reportedName && !legacyName)) {
+    return null;
+  }
+
+  return {
+    id,
+    kind: device.kind === "mobile" ? "mobile" : "desktop",
+    reportedName,
+    name: legacyName,
+    metadata: device.metadata
+      ? {
+          platformFamily: normalizeText(device.metadata.platformFamily),
+          platformVersion: normalizeText(device.metadata.platformVersion),
+          architecture: normalizeText(device.metadata.architecture),
+          browserName: normalizeText(device.metadata.browserName),
+          browserVersion: normalizeText(device.metadata.browserVersion),
+          model: normalizeText(device.metadata.model),
+        }
+      : null,
+  };
+}
+
+function parseRequester(value: unknown): Track["requestedBy"] | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const requester = value as {
+    profileId?: unknown;
+    profileName?: unknown;
+  };
+  const profileId = normalizeText(requester.profileId);
+  const profileName = normalizeText(requester.profileName);
+
+  if (!profileId || !profileName) {
+    return undefined;
+  }
+
+  return {
+    profileId,
+    profileName,
+  };
+}
 
 function toSyncErrorResponse(error: unknown): {
   status: 404 | 409 | 500;
   body: ApiResponse;
 } {
   if (error instanceof SyncServiceError) {
-    if (error.code === "INVALID_PAIR_CODE") {
+    if (
+      error.code === "INVALID_PAIR_CODE" ||
+      error.code === "SYNC_DEVICE_NOT_FOUND"
+    ) {
       return {
         status: 404,
         body: {
@@ -172,7 +247,10 @@ api.get("/search", async (c) => {
  */
 api.post("/queue", async (c) => {
   try {
-    const body = await c.req.json<{ track: Track }>();
+    const body = await c.req.json<{
+      track: Track;
+      requestedBy?: Track["requestedBy"];
+    }>();
 
     if (!body.track || !body.track.videoId) {
       return c.json<ApiResponse>(
@@ -185,7 +263,9 @@ api.post("/queue", async (c) => {
     }
 
     const queueService = getQueueService();
-    await queueService.addToQueue(body.track);
+    await queueService.addToQueue(body.track, {
+      requestedBy: parseRequester(body.requestedBy),
+    });
 
     return c.json<ApiResponse>({
       success: true,
@@ -209,7 +289,10 @@ api.post("/queue", async (c) => {
  */
 api.post("/mix", async (c) => {
   try {
-    const body = await c.req.json<{ track: Track }>();
+    const body = await c.req.json<{
+      track: Track;
+      requestedBy?: Track["requestedBy"];
+    }>();
 
     if (!body.track || !body.track.videoId) {
       return c.json<ApiResponse>(
@@ -219,7 +302,9 @@ api.post("/mix", async (c) => {
     }
 
     const queueService = getQueueService();
-    const tracks = await queueService.createMixFromTrack(body.track);
+    const tracks = await queueService.createMixFromTrack(body.track, {
+      requestedBy: parseRequester(body.requestedBy),
+    });
 
     return c.json<ApiResponse>({
       success: true,
@@ -314,10 +399,12 @@ api.post("/sync/session", async (c) => {
       sessionId?: string | null;
       deviceToken?: string | null;
       profileId: string;
+      profileName?: string | null;
       device: SyncDeviceRequest;
     }>();
+    const device = parseSyncDevice(body.device);
 
-    if (!body.profileId || !body.device?.id || !body.device?.name) {
+    if (!body.profileId || !device) {
       return c.json<ApiResponse>(
         { success: false, error: "profileId and device are required" },
         400,
@@ -325,7 +412,13 @@ api.post("/sync/session", async (c) => {
     }
 
     const syncService = getSyncService();
-    const session = syncService.createOrResumeSession(body);
+    const session = syncService.createOrResumeSession({
+      sessionId: body.sessionId,
+      deviceToken: body.deviceToken,
+      profileId: body.profileId,
+      profileName: body.profileName,
+      device,
+    });
 
     return c.json<ApiResponse>({
       success: true,
@@ -349,8 +442,9 @@ api.post("/sync/pair", async (c) => {
       profileId: string;
       device: SyncDeviceRequest;
     }>();
+    const device = parseSyncDevice(body.device);
 
-    if (!body.pairCode || !body.profileId || !body.device?.id || !body.device?.name) {
+    if (!body.pairCode || !body.profileId || !device) {
       return c.json<ApiResponse>(
         { success: false, error: "pairCode, profileId and device are required" },
         400,
@@ -358,7 +452,11 @@ api.post("/sync/pair", async (c) => {
     }
 
     const syncService = getSyncService();
-    const session = syncService.pairToSession(body);
+    const session = syncService.pairToSession({
+      pairCode: body.pairCode,
+      profileId: body.profileId,
+      device,
+    });
 
     return c.json<ApiResponse>({
       success: true,
@@ -366,6 +464,43 @@ api.post("/sync/pair", async (c) => {
     });
   } catch (error) {
     console.error("Failed to pair sync session:", error);
+    const response = toSyncErrorResponse(error);
+    return c.json<ApiResponse>(response.body, response.status);
+  }
+});
+
+/**
+ * PATCH /api/sync/session/profile
+ * 更新同步 session 的使用者名稱
+ */
+api.patch("/sync/session/profile", async (c) => {
+  try {
+    const body = await c.req.json<{
+      sessionId: string;
+      profileName: string;
+    }>();
+
+    if (!body.sessionId || typeof body.profileName !== "string") {
+      return c.json<ApiResponse>(
+        { success: false, error: "sessionId and profileName are required" },
+        400,
+      );
+    }
+
+    const syncService = getSyncService();
+    const profile = syncService.updateProfileName(
+      body.sessionId,
+      body.profileName,
+    );
+    getQueueService().renameRequesterProfile(
+      profile.profileId,
+      profile.profileName,
+    );
+    return c.json<ApiResponse>({
+      success: true,
+      data: profile,
+    });
+  } catch (error) {
     const response = toSyncErrorResponse(error);
     return c.json<ApiResponse>(response.body, response.status);
   }
@@ -387,6 +522,38 @@ api.get("/sync/devices", (c) => {
 
   try {
     const devices = getSyncService().getDevices(sessionId);
+    return c.json<ApiResponse>({
+      success: true,
+      data: { devices },
+    });
+  } catch (error) {
+    const response = toSyncErrorResponse(error);
+    return c.json<ApiResponse>(response.body, response.status);
+  }
+});
+
+/**
+ * PATCH /api/sync/devices/:deviceId
+ * 更新裝置顯示名稱
+ */
+api.patch("/sync/devices/:deviceId", async (c) => {
+  const deviceId = c.req.param("deviceId");
+
+  try {
+    const body = await c.req.json<{ sessionId: string; name: string }>();
+
+    if (!deviceId || !body.sessionId || typeof body.name !== "string") {
+      return c.json<ApiResponse>(
+        { success: false, error: "sessionId and name are required" },
+        400,
+      );
+    }
+
+    const devices = getSyncService().renameDevice(
+      body.sessionId,
+      deviceId,
+      body.name,
+    );
     return c.json<ApiResponse>({
       success: true,
       data: { devices },
@@ -492,7 +659,10 @@ api.post("/queue/reorder", async (c) => {
  */
 api.post("/library/playlists/:playlistId/play", async (c) => {
   try {
-    const body = await c.req.json<{ tracks: Track[] }>();
+    const body = await c.req.json<{
+      tracks: Track[];
+      requestedBy?: Track["requestedBy"];
+    }>();
 
     if (!Array.isArray(body.tracks) || body.tracks.length === 0) {
       return c.json<ApiResponse>(
@@ -502,7 +672,9 @@ api.post("/library/playlists/:playlistId/play", async (c) => {
     }
 
     const queueService = getQueueService();
-    await queueService.replaceQueueWithTracks(body.tracks, "playlist");
+    await queueService.replaceQueueWithTracks(body.tracks, "playlist", {
+      requestedBy: parseRequester(body.requestedBy),
+    });
 
     return c.json<ApiResponse>({
       success: true,
@@ -523,7 +695,10 @@ api.post("/library/playlists/:playlistId/play", async (c) => {
  */
 api.post("/library/playlists/:playlistId/queue", async (c) => {
   try {
-    const body = await c.req.json<{ tracks: Track[] }>();
+    const body = await c.req.json<{
+      tracks: Track[];
+      requestedBy?: Track["requestedBy"];
+    }>();
 
     if (!Array.isArray(body.tracks) || body.tracks.length === 0) {
       return c.json<ApiResponse>(
@@ -533,7 +708,9 @@ api.post("/library/playlists/:playlistId/queue", async (c) => {
     }
 
     const queueService = getQueueService();
-    await queueService.appendTracksToQueue(body.tracks, "playlist");
+    await queueService.appendTracksToQueue(body.tracks, "playlist", {
+      requestedBy: parseRequester(body.requestedBy),
+    });
 
     return c.json<ApiResponse>({
       success: true,

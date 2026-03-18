@@ -5,7 +5,7 @@ import { Empty } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/components/ui/toast";
 import { usePlayerStore } from "@/stores/playerStore";
-import { useLibraryStore } from "@/stores/libraryStore";
+import { getCurrentRequester, useLibraryStore } from "@/stores/libraryStore";
 import { api } from "@/services/api";
 import type { Track } from "@/types";
 
@@ -18,6 +18,9 @@ export const SearchSection = () => {
   const setSearchResults = usePlayerStore((state) => state.setSearchResults);
   const openPlaylistPicker = useLibraryStore((state) => state.openPlaylistPicker);
   const saveMix = useLibraryStore((state) => state.saveMix);
+  const currentRequester = useLibraryStore((state) =>
+    getCurrentRequester(state.snapshot),
+  );
   const { showToast } = useToast();
 
   const handleSearch = async (query: string) => {
@@ -42,7 +45,7 @@ export const SearchSection = () => {
   const handleAddToQueue = async (track: Track) => {
     setAddingId(track.videoId);
     try {
-      const response = await api.addToQueue(track);
+      const response = await api.addToQueue(track, currentRequester);
       if (response.success) {
         showToast({ message: "已加入播放佇列", type: "success" });
       } else {
@@ -58,7 +61,7 @@ export const SearchSection = () => {
   const handleCreateMix = async (track: Track) => {
     setCreatingMixId(track.videoId);
     try {
-      const response = await api.createMix(track);
+      const response = await api.createMix(track, currentRequester);
       if (response.success && response.data) {
         void saveMix(track, response.data.tracks);
         showToast({

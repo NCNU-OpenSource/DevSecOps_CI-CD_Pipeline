@@ -1,5 +1,9 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { useLibraryStore, getCurrentDevice } from "@/stores/libraryStore";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useLibraryStore,
+  getCurrentDevice,
+  getCurrentRequester,
+} from "@/stores/libraryStore";
 import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,6 +12,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar } from "@/components/ui/avatar";
 import { api } from "@/services/api";
 import { formatTime } from "@/utils/format";
+import { formatDeviceDetail } from "@/utils/device-info";
 import { cn } from "@/lib/utils";
 import type {
   HistoryEntry,
@@ -52,6 +57,8 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
   const syncError = useLibraryStore((state) => state.syncError);
   const selectPlaylist = useLibraryStore((state) => state.selectPlaylist);
   const applySyncSession = useLibraryStore((state) => state.applySyncSession);
+  const updatePairedDevices = useLibraryStore((state) => state.updatePairedDevices);
+  const updateProfileName = useLibraryStore((state) => state.updateProfileName);
   const createPlaylist = useLibraryStore((state) => state.createPlaylist);
   const renamePlaylist = useLibraryStore((state) => state.renamePlaylist);
   const deletePlaylist = useLibraryStore((state) => state.deletePlaylist);
@@ -64,6 +71,9 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
   const [playlistName, setPlaylistName] = useState("");
   const [pairCodeInput, setPairCodeInput] = useState("");
   const [isPairing, setIsPairing] = useState(false);
+  const [profileNameInput, setProfileNameInput] = useState("未命名使用者");
+  const [isSavingProfileName, setIsSavingProfileName] = useState(false);
+  const [renamingDeviceId, setRenamingDeviceId] = useState<string | null>(null);
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [activeSection, setActiveSection] = useState<LibrarySection>("playlists");
@@ -78,6 +88,7 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
     [selectedPlaylistId, snapshot?.playlists],
   );
   const currentDevice = getCurrentDevice(snapshot ?? null);
+  const currentRequester = getCurrentRequester(snapshot ?? null);
   const favoriteTrackIds = useMemo(
     () => new Set(snapshot?.favorites.map((favorite) => favorite.videoId) ?? []),
     [snapshot?.favorites],
@@ -119,6 +130,14 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
     );
   }, [normalizedQuery, snapshot?.history]);
 
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+
+    setProfileNameInput(snapshot.profileName);
+  }, [snapshot?.profileName]);
+
   if (!ready || !snapshot) {
     return (
       <Card className="surface-card flex h-full items-center justify-center rounded-[32px] p-8">
@@ -137,6 +156,7 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
     const response = await api.playPlaylist(
       playlist.id,
       playlist.tracks.map((entry) => entry.track),
+      currentRequester,
     );
 
     if (response.success) {
@@ -151,6 +171,7 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
     const response = await api.queuePlaylist(
       playlist.id,
       playlist.tracks.map((entry) => entry.track),
+      currentRequester,
     );
 
     if (response.success) {
@@ -162,7 +183,7 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
   };
 
   const handleReplayMix = async (savedMix: SavedMix) => {
-    const response = await api.createMix(savedMix.seedTrack);
+    const response = await api.createMix(savedMix.seedTrack, currentRequester);
 
     if (response.success) {
       showToast({ message: "已重新啟動 Mix", type: "success" });
@@ -173,7 +194,7 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
   };
 
   const handleAddTrackToQueue = async (track: PlaylistTrackEntry["track"]) => {
-    const response = await api.addToQueue(track);
+    const response = await api.addToQueue(track, currentRequester);
 
     if (response.success) {
       showToast({ message: `已加入播放佇列：${track.title}`, type: "success" });
@@ -195,8 +216,10 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
         profileId: snapshot.profileId,
         device: {
           id: currentDevice.id,
-          name: currentDevice.name,
+          name: currentDevice.displayName,
           kind: currentDevice.kind,
+          reportedName: currentDevice.reportedName,
+          metadata: currentDevice.metadata,
         },
       });
 
@@ -208,11 +231,80 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
       await applySyncSession({
         ...response.data,
         pairCode: response.data.pairCode,
+        profileName:
+          String((response.data as { profileName?: unknown }).profileName ?? "").trim() ||
+          snapshot.profileName,
       });
       setPairCodeInput("");
       showToast({ message: "裝置已加入同步 session", type: "success" });
     } finally {
       setIsPairing(false);
+    }
+  };
+
+  const handleSaveProfileName = async () => {
+    if (!snapshot) {
+      return;
+    }
+
+    const nextName = profileNameInput.trim() || snapshot.profileName;
+    if (nextName === snapshot.profileName) {
+      return;
+    }
+
+    setIsSavingProfileName(true);
+    try {
+      if (!snapshot.syncSessionId) {
+        await updateProfileName(nextName);
+        showToast({ message: "已更新使用者名稱", type: "success" });
+        return;
+      }
+
+      const response = await api.updateSyncProfileName(
+        snapshot.syncSessionId,
+        nextName,
+      );
+      if (!response.success) {
+        showToast({ message: response.error || "更新使用者名稱失敗", type: "error" });
+        return;
+      }
+
+      await updateProfileName(response.data?.profileName ?? nextName);
+      showToast({ message: "已更新使用者名稱", type: "success" });
+    } finally {
+      setIsSavingProfileName(false);
+    }
+  };
+
+  const handleRenameDevice = async (deviceId: string, name: string) => {
+    if (!snapshot?.syncSessionId) {
+      return;
+    }
+
+    const nextName = name.trim();
+    if (!nextName) {
+      showToast({ message: "請輸入裝置名稱", type: "error" });
+      return;
+    }
+
+    setRenamingDeviceId(deviceId);
+    try {
+      const response = await api.renameSyncDevice(
+        snapshot.syncSessionId,
+        deviceId,
+        nextName,
+      );
+      if (!response.success) {
+        showToast({ message: response.error || "裝置重新命名失敗", type: "error" });
+        return;
+      }
+
+      if (response.data && Array.isArray(response.data.devices)) {
+        await updatePairedDevices(response.data.devices);
+      }
+      showToast({ message: "裝置名稱已更新", type: "success" });
+    } finally {
+      setRenamingDeviceId(null);
     }
   };
 
@@ -279,6 +371,11 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
         favoriteTrackIds={favoriteTrackIds}
         savedMixes={snapshot.savedMixes}
         pairedDevices={snapshot.pairedDevices}
+        profileName={snapshot.profileName}
+        profileNameInput={profileNameInput}
+        onProfileNameInputChange={setProfileNameInput}
+        onSaveProfileName={() => void handleSaveProfileName()}
+        isSavingProfileName={isSavingProfileName}
         syncPairCode={syncPairCode}
         syncStatus={syncStatus}
         syncError={syncError}
@@ -296,6 +393,8 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
           showToast({ message: "已從媒體庫移除 Mix", type: "success" });
         }}
         onRemoveDevice={(deviceId) => void handleRemoveDevice(deviceId)}
+        onRenameDevice={(deviceId, name) => void handleRenameDevice(deviceId, name)}
+        renamingDeviceId={renamingDeviceId}
         currentDeviceId={currentDevice?.id ?? null}
       />
     ) : (
@@ -315,6 +414,11 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
         favoriteTrackIds={favoriteTrackIds}
         savedMixes={snapshot.savedMixes}
         pairedDevices={snapshot.pairedDevices}
+        profileName={snapshot.profileName}
+        profileNameInput={profileNameInput}
+        onProfileNameInputChange={setProfileNameInput}
+        onSaveProfileName={() => void handleSaveProfileName()}
+        isSavingProfileName={isSavingProfileName}
         syncPairCode={syncPairCode}
         syncStatus={syncStatus}
         syncError={syncError}
@@ -332,6 +436,8 @@ export const LibraryView = ({ isMobile = false }: LibraryViewProps) => {
           showToast({ message: "已從媒體庫移除 Mix", type: "success" });
         }}
         onRemoveDevice={(deviceId) => void handleRemoveDevice(deviceId)}
+        onRenameDevice={(deviceId, name) => void handleRenameDevice(deviceId, name)}
+        renamingDeviceId={renamingDeviceId}
         currentDeviceId={currentDevice?.id ?? null}
         counts={{
           playlists: snapshot.playlists.length,
@@ -377,6 +483,11 @@ interface LibraryHomeBaseProps {
   favoriteTrackIds: Set<string>;
   savedMixes: SavedMix[];
   pairedDevices: PairedDevice[];
+  profileName: string;
+  profileNameInput: string;
+  onProfileNameInputChange: (value: string) => void;
+  onSaveProfileName: () => void;
+  isSavingProfileName: boolean;
   syncPairCode: string | null;
   syncStatus: "idle" | "connecting" | "connected" | "error";
   syncError: string | null;
@@ -391,6 +502,8 @@ interface LibraryHomeBaseProps {
   onReplayMix: (savedMix: SavedMix) => void;
   onDeleteMix: (mixId: string) => void | Promise<void>;
   onRemoveDevice: (deviceId: string) => void;
+  onRenameDevice: (deviceId: string, name: string) => void;
+  renamingDeviceId: string | null;
   currentDeviceId: string | null;
 }
 
@@ -417,6 +530,11 @@ const DesktopLibraryHome = ({
   favoriteTrackIds,
   savedMixes,
   pairedDevices,
+  profileName,
+  profileNameInput,
+  onProfileNameInputChange,
+  onSaveProfileName,
+  isSavingProfileName,
   syncPairCode,
   syncStatus,
   syncError,
@@ -431,6 +549,8 @@ const DesktopLibraryHome = ({
   onReplayMix,
   onDeleteMix,
   onRemoveDevice,
+  onRenameDevice,
+  renamingDeviceId,
   currentDeviceId,
   counts,
 }: DesktopLibraryHomeProps) => (
@@ -536,6 +656,11 @@ const DesktopLibraryHome = ({
       />
       <DevicesPanel
         pairedDevices={pairedDevices}
+        profileName={profileName}
+        profileNameInput={profileNameInput}
+        onProfileNameInputChange={onProfileNameInputChange}
+        onSaveProfileName={onSaveProfileName}
+        isSavingProfileName={isSavingProfileName}
         syncPairCode={syncPairCode}
         syncStatus={syncStatus}
         syncError={syncError}
@@ -544,6 +669,8 @@ const DesktopLibraryHome = ({
         isPairing={isPairing}
         onPairDevice={onPairDevice}
         onRemoveDevice={onRemoveDevice}
+        onRenameDevice={onRenameDevice}
+        renamingDeviceId={renamingDeviceId}
         currentDeviceId={currentDeviceId}
       />
     </div>
@@ -564,6 +691,11 @@ const MobileLibraryHome = ({
   favoriteTrackIds,
   savedMixes,
   pairedDevices,
+  profileName,
+  profileNameInput,
+  onProfileNameInputChange,
+  onSaveProfileName,
+  isSavingProfileName,
   syncPairCode,
   syncStatus,
   syncError,
@@ -578,6 +710,8 @@ const MobileLibraryHome = ({
   onReplayMix,
   onDeleteMix,
   onRemoveDevice,
+  onRenameDevice,
+  renamingDeviceId,
   currentDeviceId,
 }: LibraryHomeBaseProps) => (
   <div className="space-y-5">
@@ -657,6 +791,11 @@ const MobileLibraryHome = ({
     <DevicesPanel
       mobile
       pairedDevices={pairedDevices}
+      profileName={profileName}
+      profileNameInput={profileNameInput}
+      onProfileNameInputChange={onProfileNameInputChange}
+      onSaveProfileName={onSaveProfileName}
+      isSavingProfileName={isSavingProfileName}
       syncPairCode={syncPairCode}
       syncStatus={syncStatus}
       syncError={syncError}
@@ -665,6 +804,8 @@ const MobileLibraryHome = ({
       isPairing={isPairing}
       onPairDevice={onPairDevice}
       onRemoveDevice={onRemoveDevice}
+      onRenameDevice={onRenameDevice}
+      renamingDeviceId={renamingDeviceId}
       currentDeviceId={currentDeviceId}
     />
   </div>
@@ -1005,6 +1146,11 @@ const SavedMixPanel = ({
 
 const DevicesPanel = ({
   pairedDevices,
+  profileName,
+  profileNameInput,
+  onProfileNameInputChange,
+  onSaveProfileName,
+  isSavingProfileName,
   syncPairCode,
   syncStatus,
   syncError,
@@ -1013,10 +1159,17 @@ const DevicesPanel = ({
   isPairing,
   onPairDevice,
   onRemoveDevice,
+  onRenameDevice,
+  renamingDeviceId,
   currentDeviceId,
   mobile = false,
 }: {
   pairedDevices: PairedDevice[];
+  profileName: string;
+  profileNameInput: string;
+  onProfileNameInputChange: (value: string) => void;
+  onSaveProfileName: () => void;
+  isSavingProfileName: boolean;
   syncPairCode: string | null;
   syncStatus: "idle" | "connecting" | "connected" | "error";
   syncError: string | null;
@@ -1025,88 +1178,175 @@ const DevicesPanel = ({
   isPairing: boolean;
   onPairDevice: () => void;
   onRemoveDevice: (deviceId: string) => void;
+  onRenameDevice: (deviceId: string, name: string) => void;
+  renamingDeviceId: string | null;
   currentDeviceId: string | null;
   mobile?: boolean;
-}) => (
-  <Card className="surface-card rounded-[30px] p-5">
-    <div className="mb-4">
-      <h3 className="text-xl font-semibold text-[var(--text-primary)]">已配對裝置</h3>
-      <p className="mt-1 text-sm text-[var(--text-secondary)]">
-        使用配對碼連接不同裝置，讓收藏、歷史、Mix 和歌單一起同步。
-      </p>
-    </div>
-    <div className="mb-5 grid gap-3">
-      <div className="surface-subtle min-w-0 rounded-[24px] border px-4 py-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
-          配對碼
+}) => {
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [deviceNameInput, setDeviceNameInput] = useState("");
+
+  return (
+    <Card className="surface-card rounded-[30px] p-5">
+      <div className="mb-4">
+        <h3 className="text-xl font-semibold text-[var(--text-primary)]">已配對裝置</h3>
+        <p className="mt-1 text-sm text-[var(--text-secondary)]">
+          使用配對碼連接不同裝置，讓收藏、歷史、Mix 和歌單一起同步。
         </p>
-        <p className="mt-2 text-2xl font-semibold tracking-[0.28em] text-[var(--text-primary)]">
-          {syncPairCode ?? "------"}
-        </p>
-        <p className="mt-2 text-sm text-[var(--text-secondary)]">
-          {syncStatus === "connected"
-            ? "目前同步已連線，其他裝置輸入這組代碼即可加入。"
-            : syncStatus === "connecting"
-              ? "正在建立同步連線..."
-              : "同步尚未就緒，系統會自動重試。"}
-        </p>
-        {syncError ? <p className="mt-2 text-sm text-red-500">{syncError}</p> : null}
       </div>
-      <div className="min-w-0 grid gap-3">
-        <input
-          value={pairCodeInput}
-          onChange={(event) => onPairCodeInputChange(event.target.value.toUpperCase())}
-          placeholder="輸入配對碼"
-          className="h-12 w-full min-w-0 rounded-2xl border border-[color:var(--surface-border)] bg-[var(--surface-subtle)] px-4 text-sm tracking-[0.22em] text-[var(--text-primary)] uppercase outline-none"
-        />
-        <Button
-          className="h-12 w-full rounded-2xl px-5"
-          disabled={isPairing || pairCodeInput.trim().length < 6}
-          onClick={onPairDevice}
-        >
-          連接裝置
-        </Button>
-      </div>
-    </div>
-    <ScrollArea className="w-full" maxHeight={mobile ? "28vh" : "30vh"}>
-      <div className="grid gap-3">
-        {pairedDevices.map((device) => (
-          <div
-            key={device.id}
-            className="surface-subtle flex items-center justify-between gap-4 rounded-[24px] border px-4 py-4"
-          >
-            <div className="min-w-0">
-              <p className="text-base font-semibold text-[var(--text-primary)]">
-                {device.name}
-              </p>
-              <p className="mt-1 truncate text-sm text-[var(--text-secondary)]">
-                {device.kind === "desktop" ? "桌面裝置" : "手機裝置"} ·{" "}
-                {device.connected ? "已連線" : "離線"}
-                {device.lastSeenAt ? ` · ${new Date(device.lastSeenAt).toLocaleString()}` : ""}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {device.id === currentDeviceId ? (
-                <span className="rounded-full border border-[color:var(--dynamic-ring)] bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent)]">
-                  本機
-                </span>
-              ) : null}
-              {!device.isCurrentDevice ? (
-                <Button
-                  variant="outline"
-                  className="rounded-2xl"
-                  onClick={() => onRemoveDevice(device.id)}
-                >
-                  移除
-                </Button>
-              ) : null}
-            </div>
+      <div className="mb-5 grid gap-3">
+        <div className="surface-subtle min-w-0 rounded-[24px] border px-4 py-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+            使用者名稱
+          </p>
+          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+            這個名稱會用在多裝置同步與點歌者顯示。
+          </p>
+          <div className="mt-3 flex gap-2">
+            <input
+              value={profileNameInput}
+              onChange={(event) => onProfileNameInputChange(event.target.value)}
+              placeholder="輸入使用者名稱"
+              className="h-11 w-full min-w-0 rounded-2xl border border-[color:var(--surface-border)] bg-[var(--surface-elevated)] px-4 text-sm text-[var(--text-primary)] outline-none"
+            />
+            <Button
+              className="h-11 shrink-0 rounded-2xl px-4"
+              onClick={onSaveProfileName}
+              disabled={isSavingProfileName || profileNameInput.trim().length === 0}
+            >
+              儲存
+            </Button>
           </div>
-        ))}
+          <p className="mt-2 text-xs text-[var(--text-muted)]">目前：{profileName}</p>
+        </div>
+        <div className="surface-subtle min-w-0 rounded-[24px] border px-4 py-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-muted)]">
+            配對碼
+          </p>
+          <p className="mt-2 text-2xl font-semibold tracking-[0.28em] text-[var(--text-primary)]">
+            {syncPairCode ?? "------"}
+          </p>
+          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+            {syncStatus === "connected"
+              ? "目前同步已連線，其他裝置輸入這組代碼即可加入。"
+              : syncStatus === "connecting"
+                ? "正在建立同步連線..."
+                : "同步尚未就緒，系統會自動重試。"}
+          </p>
+          {syncError ? <p className="mt-2 text-sm text-red-500">{syncError}</p> : null}
+        </div>
+        <div className="min-w-0 grid gap-3">
+          <input
+            value={pairCodeInput}
+            onChange={(event) => onPairCodeInputChange(event.target.value.toUpperCase())}
+            placeholder="輸入配對碼"
+            className="h-12 w-full min-w-0 rounded-2xl border border-[color:var(--surface-border)] bg-[var(--surface-subtle)] px-4 text-sm tracking-[0.22em] text-[var(--text-primary)] uppercase outline-none"
+          />
+          <Button
+            className="h-12 w-full rounded-2xl px-5"
+            disabled={isPairing || pairCodeInput.trim().length < 6}
+            onClick={onPairDevice}
+          >
+            連接裝置
+          </Button>
+        </div>
       </div>
-    </ScrollArea>
-  </Card>
-);
+      <ScrollArea className="w-full" maxHeight={mobile ? "28vh" : "30vh"}>
+        <div className="grid gap-3">
+          {pairedDevices.map((device) => {
+            const detail = formatDeviceDetail(device.metadata, device.kind);
+            const isEditing = editingDeviceId === device.id;
+
+            return (
+              <div
+                key={device.id}
+                className="surface-subtle rounded-[24px] border px-4 py-4"
+              >
+                <div className="min-w-0">
+                  {isEditing ? (
+                    <div className="flex flex-col gap-2">
+                      <input
+                        value={deviceNameInput}
+                        onChange={(event) => setDeviceNameInput(event.target.value)}
+                        placeholder="輸入裝置名稱"
+                        className="h-10 w-full min-w-0 rounded-2xl border border-[color:var(--surface-border)] bg-[var(--surface-elevated)] px-3 text-sm text-[var(--text-primary)] outline-none"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          className="h-10 rounded-2xl px-3"
+                          disabled={
+                            renamingDeviceId === device.id || deviceNameInput.trim().length === 0
+                          }
+                          onClick={() => {
+                            onRenameDevice(device.id, deviceNameInput);
+                            setEditingDeviceId(null);
+                            setDeviceNameInput("");
+                          }}
+                        >
+                          儲存
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="h-10 rounded-2xl px-3"
+                          onClick={() => {
+                            setEditingDeviceId(null);
+                            setDeviceNameInput("");
+                          }}
+                        >
+                          取消
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-base font-semibold text-[var(--text-primary)]">
+                        {device.displayName}
+                      </p>
+                      <p className="mt-1 break-words text-sm text-[var(--text-secondary)]">
+                        {detail} · {device.connected ? "已連線" : "離線"}
+                        {device.lastSeenAt
+                          ? ` · ${new Date(device.lastSeenAt).toLocaleString()}`
+                          : ""}
+                      </p>
+                    </>
+                  )}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {device.id === currentDeviceId ? (
+                    <span className="rounded-full border border-[color:var(--dynamic-ring)] bg-[var(--accent-soft)] px-3 py-1 text-xs font-semibold text-[var(--accent)]">
+                      本機
+                    </span>
+                  ) : null}
+                  {!isEditing ? (
+                    <Button
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => {
+                        setEditingDeviceId(device.id);
+                        setDeviceNameInput(device.customName ?? device.displayName);
+                      }}
+                    >
+                      重新命名
+                    </Button>
+                  ) : null}
+                  {!device.isCurrentDevice ? (
+                    <Button
+                      variant="outline"
+                      className="rounded-2xl"
+                      onClick={() => onRemoveDevice(device.id)}
+                    >
+                      移除
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </ScrollArea>
+    </Card>
+  );
+};
 
 function getSectionSearchPlaceholder(section: LibrarySection) {
   if (section === "playlists") {

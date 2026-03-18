@@ -161,6 +161,7 @@ export const NowPlaying = ({
     (favorite) => favorite.videoId === currentTrack.videoId,
   );
   const isSidebarCompact = compact && sidebarMode;
+  const requesterLabel = currentTrack.requestedBy?.profileName?.trim() || null;
 
   return (
     <div
@@ -224,6 +225,21 @@ export const NowPlaying = ({
           >
             {currentTrack.artist}
           </p>
+          {requesterLabel ? (
+            <p
+              className={cn(
+                "truncate text-[var(--text-muted)]",
+                isSidebarCompact
+                  ? "text-sm"
+                  : compact
+                    ? "text-base"
+                    : "text-sm lg:text-base",
+              )}
+              title={`點歌者：${requesterLabel}`}
+            >
+              點歌者：{requesterLabel}
+            </p>
+          ) : null}
         </div>
         <div
           className={cn(

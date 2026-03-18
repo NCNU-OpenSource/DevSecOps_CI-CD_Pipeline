@@ -194,5 +194,118 @@ describe("QueueService - seekTo functionality", () => {
         "Invalid queue index",
       );
     });
+
+    test("should preserve requestedBy on addToQueue", async () => {
+      const internalQueueService = queueService as unknown as {
+        currentTrack: Track | null;
+      };
+
+      internalQueueService.currentTrack = track("playing", "Playing");
+
+      await queueService.addToQueue({
+        ...track("track-1", "Track 1"),
+        requestedBy: {
+          profileId: "profile-a",
+          profileName: "Alice",
+        },
+      });
+
+      expect(queueService.getQueue()[0]?.requestedBy).toEqual({
+        profileId: "profile-a",
+        profileName: "Alice",
+      });
+    });
+
+    test("should stamp requestedBy via addToQueue options when track has none", async () => {
+      const internalQueueService = queueService as unknown as {
+        currentTrack: Track | null;
+      };
+
+      internalQueueService.currentTrack = track("playing", "Playing");
+
+      await queueService.addToQueue(track("track-2", "Track 2"), {
+        requestedBy: {
+          profileId: "profile-b",
+          profileName: "Bob",
+        },
+      });
+
+      expect(queueService.getQueue()[0]?.requestedBy).toEqual({
+        profileId: "profile-b",
+        profileName: "Bob",
+      });
+    });
+
+    test("should stamp requestedBy on appended tracks when fallback is provided", async () => {
+      const internalQueueService = queueService as unknown as {
+        currentTrack: Track | null;
+      };
+
+      internalQueueService.currentTrack = track("playing", "Playing");
+
+      await queueService.appendTracksToQueue(
+        [track("track-3", "Track 3"), track("track-4", "Track 4")],
+        "playlist",
+        {
+          requestedBy: {
+            profileId: "profile-c",
+            profileName: "Carol",
+          },
+        },
+      );
+
+      expect(queueService.getQueue().map((item) => item.requestedBy)).toEqual([
+        { profileId: "profile-c", profileName: "Carol" },
+        { profileId: "profile-c", profileName: "Carol" },
+      ]);
+    });
+
+    test("should rename requester profile across queue and playback state", () => {
+      const internalQueueService = queueService as unknown as {
+        queue: Track[];
+        currentTrack: Track | null;
+        lastPlayedTrack: Track | null;
+      };
+
+      internalQueueService.queue = [
+        {
+          ...track("track-5", "Track 5"),
+          requestedBy: {
+            profileId: "profile-d",
+            profileName: "Dana",
+          },
+        },
+      ];
+      internalQueueService.currentTrack = {
+        ...track("current", "Current"),
+        requestedBy: {
+          profileId: "profile-d",
+          profileName: "Dana",
+        },
+      };
+      internalQueueService.lastPlayedTrack = {
+        ...track("last", "Last"),
+        requestedBy: {
+          profileId: "profile-d",
+          profileName: "Dana",
+        },
+      };
+
+      queueService.renameRequesterProfile("profile-d", "Daphne");
+
+      const state = queueService.getState();
+      expect(state.currentTrack?.requestedBy).toEqual({
+        profileId: "profile-d",
+        profileName: "Daphne",
+      });
+      expect(state.lastPlayedTrack?.requestedBy).toEqual({
+        profileId: "profile-d",
+        profileName: "Daphne",
+      });
+      expect(queueService.getQueue()[0]?.requestedBy).toEqual({
+        profileId: "profile-d",
+        profileName: "Daphne",
+      });
+    });
   });
 });

@@ -3,12 +3,46 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import api from "../routes/api.ts";
+import {
+  __resetQueueServiceForTests,
+  getQueueService,
+} from "../services/queue.service.ts";
 import { __resetSyncServiceForTests } from "../services/sync.service.ts";
+
+type RestorableMethod = {
+  target: Record<string, unknown>;
+  key: string;
+  original: unknown;
+};
+
+const restores: RestorableMethod[] = [];
+
+function stubMethod<T extends object, K extends keyof T>(
+  target: T,
+  key: K,
+  replacement: T[K],
+): void {
+  restores.push({
+    target: target as Record<string, unknown>,
+    key: key as string,
+    original: target[key],
+  });
+  target[key] = replacement;
+}
+
+function restoreMethods(): void {
+  while (restores.length > 0) {
+    const restore = restores.pop()!;
+    restore.target[restore.key] = restore.original;
+  }
+}
 
 describe("/api/sync", () => {
   let tempDir = "";
 
   beforeEach(() => {
+    restoreMethods();
+    __resetQueueServiceForTests();
     __resetSyncServiceForTests();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
@@ -18,6 +52,8 @@ describe("/api/sync", () => {
   });
 
   afterEach(() => {
+    restoreMethods();
+    __resetQueueServiceForTests();
     __resetSyncServiceForTests();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
@@ -32,10 +68,15 @@ describe("/api/sync", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         profileId: "profile-a",
+        profileName: "Alice",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
+          metadata: {
+            architecture: "arm64",
+            browserName: "Chrome",
+          },
         },
       }),
     });
@@ -45,6 +86,7 @@ describe("/api/sync", () => {
       success: boolean;
       data: {
         profileId: string;
+        profileName: string;
         devices: Array<{ id: string }>;
         deviceToken: string;
         pairCode: string;
@@ -53,8 +95,39 @@ describe("/api/sync", () => {
     };
     expect(payload.success).toBe(true);
     expect(payload.data.profileId).toBe("profile-a");
+    expect(payload.data.profileName).toBe("Alice");
     expect(payload.data.devices).toHaveLength(1);
     expect(payload.data.deviceToken).toBeTruthy();
+  });
+
+  test("should support legacy device.name payloads", async () => {
+    const response = await api.request("/sync/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profileId: "profile-a",
+        device: {
+          id: "device-a",
+          name: "Legacy Desktop",
+          kind: "desktop",
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      data: {
+        profileName: string;
+        devices: Array<{
+          id: string;
+          reportedName: string;
+          displayName: string;
+        }>;
+      };
+    };
+    expect(payload.data.profileName).toBe("Legacy Desktop");
+    expect(payload.data.devices[0]?.reportedName).toBe("Legacy Desktop");
+    expect(payload.data.devices[0]?.displayName).toBe("Legacy Desktop");
   });
 
   test("should pair into an existing sync session", async () => {
@@ -65,7 +138,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
         },
       }),
@@ -82,7 +155,7 @@ describe("/api/sync", () => {
         profileId: "profile-b",
         device: {
           id: "device-b",
-          name: "Phone B",
+          reportedName: "Phone B",
           kind: "mobile",
         },
       }),
@@ -108,7 +181,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
         },
       }),
@@ -130,7 +203,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
         },
       }),
@@ -150,7 +223,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
         },
       }),
@@ -174,13 +247,13 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
         },
       }),
     });
     const created = (await createResponse.json()) as {
-      data: { sessionId: string };
+      data: { sessionId: string; deviceToken: string };
     };
 
     const resumeResponse = await api.request("/sync/session", {
@@ -191,7 +264,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
         },
       }),
@@ -213,7 +286,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-a",
-          name: "Desktop A",
+          reportedName: "Desktop A",
           kind: "desktop",
         },
       }),
@@ -230,7 +303,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-b",
-          name: "Phone B",
+          reportedName: "Phone B",
           kind: "mobile",
         },
       }),
@@ -275,7 +348,7 @@ describe("/api/sync", () => {
         profileId: "profile-a",
         device: {
           id: "device-b",
-          name: "Phone B",
+          reportedName: "Phone B",
           kind: "mobile",
         },
       }),
@@ -287,5 +360,122 @@ describe("/api/sync", () => {
       error: "Sync session repair required",
       code: "SYNC_REPAIR_REQUIRED",
     });
+  });
+
+  test("should update session profile name", async () => {
+    const queueService = getQueueService();
+    let renamedRequester:
+      | {
+          profileId: string;
+          profileName: string;
+        }
+      | undefined;
+
+    stubMethod(
+      queueService,
+      "renameRequesterProfile",
+      ((profileId: string, profileName: string) => {
+        renamedRequester = {
+          profileId,
+          profileName,
+        };
+      }) as typeof queueService.renameRequesterProfile,
+    );
+
+    const createResponse = await api.request("/sync/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profileId: "profile-a",
+        profileName: "Alice",
+        device: {
+          id: "device-a",
+          reportedName: "Desktop A",
+          kind: "desktop",
+        },
+      }),
+    });
+    const created = (await createResponse.json()) as {
+      data: { sessionId: string; deviceToken: string };
+    };
+
+    const patchResponse = await api.request("/sync/session/profile", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: created.data.sessionId,
+        profileName: "Bob",
+      }),
+    });
+
+    expect(patchResponse.status).toBe(200);
+    const patchPayload = (await patchResponse.json()) as {
+      success: boolean;
+      data: { profileName: string };
+    };
+    expect(patchPayload.success).toBe(true);
+    expect(patchPayload.data.profileName).toBe("Bob");
+    expect(renamedRequester).toEqual({
+      profileId: "profile-a",
+      profileName: "Bob",
+    });
+
+    const resumeResponse = await api.request("/sync/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: created.data.sessionId,
+        profileId: "profile-a",
+        deviceToken: created.data.deviceToken,
+        device: {
+          id: "device-a",
+          reportedName: "Desktop A",
+          kind: "desktop",
+        },
+      }),
+    });
+    const resumePayload = (await resumeResponse.json()) as {
+      data: { profileName: string };
+    };
+    expect(resumePayload.data.profileName).toBe("Bob");
+  });
+
+  test("should rename a synced device via patch endpoint", async () => {
+    const createResponse = await api.request("/sync/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profileId: "profile-a",
+        device: {
+          id: "device-a",
+          reportedName: "Desktop A",
+          kind: "desktop",
+        },
+      }),
+    });
+    const created = (await createResponse.json()) as {
+      data: { sessionId: string };
+    };
+
+    const renameResponse = await api.request("/sync/devices/device-a", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: created.data.sessionId,
+        name: "Living Room Mac",
+      }),
+    });
+
+    expect(renameResponse.status).toBe(200);
+    const renamePayload = (await renameResponse.json()) as {
+      success: boolean;
+      data: {
+        devices: Array<{ id: string; displayName: string; customName: string | null }>;
+      };
+    };
+    expect(renamePayload.success).toBe(true);
+    expect(renamePayload.data.devices[0]?.id).toBe("device-a");
+    expect(renamePayload.data.devices[0]?.displayName).toBe("Living Room Mac");
+    expect(renamePayload.data.devices[0]?.customName).toBe("Living Room Mac");
   });
 });
