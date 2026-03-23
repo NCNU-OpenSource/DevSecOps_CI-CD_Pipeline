@@ -164,4 +164,73 @@ describe("PlayerService - seek functionality", () => {
       expect(eventSpy).toHaveBeenCalledWith({ eof: true });
     });
   });
+
+  describe("playback confirmation", () => {
+    test("should wait for a positive time-pos before confirming playback", () => {
+      const fakeProcess = {} as ChildProcess;
+      const player = playerService as unknown as {
+        beginPlaybackConfirmation: (
+          process: ChildProcess,
+          handleSuccess: () => void,
+          handleError: (error: Error) => void,
+        ) => void;
+        handlePropertyChange: (message: {
+          name: string;
+          data: number | boolean;
+        }) => void;
+      };
+      const handleSuccess = mock(() => {});
+      const handleError = mock((_error: Error) => {});
+
+      player.beginPlaybackConfirmation(
+        fakeProcess,
+        handleSuccess,
+        handleError,
+      );
+      player.handlePropertyChange({ name: "time-pos", data: 0 });
+      player.handlePropertyChange({ name: "time-pos", data: 0.25 });
+
+      expect(handleSuccess).toHaveBeenCalledTimes(1);
+      expect(handleError).not.toHaveBeenCalled();
+    });
+
+    test("should reject when mpv exits before playback is confirmed", () => {
+      const fakeProcess = {} as ChildProcess;
+      const player = playerService as unknown as {
+        beginPlaybackConfirmation: (
+          process: ChildProcess,
+          handleSuccess: () => void,
+          handleError: (error: Error) => void,
+        ) => void;
+        handleSpawnedProcessExit: (
+          process: ChildProcess,
+          code: number | null,
+          signal: NodeJS.Signals | null,
+          handleSuccess: () => void,
+          handleError: (error: Error) => void,
+        ) => void;
+      };
+      const handleSuccess = mock(() => {});
+      const handleError = mock((_error: Error) => {});
+
+      player.beginPlaybackConfirmation(
+        fakeProcess,
+        handleSuccess,
+        handleError,
+      );
+      player.handleSpawnedProcessExit(
+        fakeProcess,
+        2,
+        null,
+        handleSuccess,
+        handleError,
+      );
+
+      expect(handleSuccess).not.toHaveBeenCalled();
+      expect(handleError).toHaveBeenCalledTimes(1);
+      const firstError = handleError.mock.calls[0]?.[0];
+      expect(firstError).toBeInstanceOf(Error);
+      expect(firstError?.message).toBe("mpv exited with code 2");
+    });
+  });
 });

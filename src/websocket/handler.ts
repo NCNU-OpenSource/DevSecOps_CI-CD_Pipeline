@@ -183,11 +183,34 @@ export function initializeWebSocket(): void {
     });
   });
 
+  queueService.onTrackLoading(({ track, message }) => {
+    broadcast({
+      type: "track_loading",
+      track,
+      message,
+    });
+  });
+
+  queueService.onTrackReady((track) => {
+    broadcast({
+      type: "track_ready",
+      track,
+    });
+  });
+
   // 監聽歌詞變更
   queueService.onLyricsChange((lyrics) => {
     broadcast({
       type: "lyrics",
       lyrics,
+    });
+  });
+
+  queueService.onPlayError(({ error, track }) => {
+    broadcast({
+      type: "play_error",
+      error,
+      track,
     });
   });
 

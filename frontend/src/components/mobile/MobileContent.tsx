@@ -1,9 +1,6 @@
 import { useState, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Avatar } from "@/components/ui/avatar";
-import { OpenAlbumButton } from "@/components/album/OpenAlbumButton";
 import { Empty } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,25 +8,35 @@ import { useToast } from "@/components/ui/toast";
 import { usePlayerStore } from "@/stores/playerStore";
 import { getCurrentRequester, useLibraryStore } from "@/stores/libraryStore";
 import { api } from "@/services/api";
-import { formatTime } from "@/utils/format";
-import type { Track } from "@/types";
-import { Library } from "lucide-react";
+import { SearchResultItem } from "@/components/search/SearchResultItem";
+import type { CollectionSearchResult, Track } from "@/types";
+
+const EMPTY_FAVORITES: Array<{ videoId: string }> = [];
 
 export const MobileContent = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [creatingMixId, setCreatingMixId] = useState<string | null>(null);
+  const [addingCollectionId, setAddingCollectionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
   const inputRef = useRef<HTMLInputElement>(null);
   const searchResults = usePlayerStore((state) => state.searchResults);
   const setSearchResults = usePlayerStore((state) => state.setSearchResults);
+  const libraryReady = useLibraryStore((state) => state.ready);
+  const favorites = useLibraryStore(
+    (state) => state.snapshot?.favorites ?? EMPTY_FAVORITES,
+  );
   const openPlaylistPicker = useLibraryStore((state) => state.openPlaylistPicker);
   const saveMix = useLibraryStore((state) => state.saveMix);
+  const toggleFavorite = useLibraryStore((state) => state.toggleFavorite);
   const currentRequester = useLibraryStore((state) =>
     getCurrentRequester(state.snapshot),
   );
   const { showToast } = useToast();
+  const favoriteTrackIds = new Set(
+    favorites.map((favorite) => favorite.videoId),
+  );
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,7 +48,7 @@ export const MobileContent = () => {
       if (response.success && response.data) {
         setSearchResults(response.data);
         if (response.data.length === 0) {
-          showToast({ message: "沒有找到相關歌曲", type: "info" });
+          showToast({ message: "沒有找到相關內容", type: "info" });
         }
       } else {
         showToast({ message: response.error || "搜尋失敗", type: "error" });
@@ -69,6 +76,28 @@ export const MobileContent = () => {
     }
   };
 
+  const handleAddCollection = async (result: CollectionSearchResult) => {
+    setAddingCollectionId(result.id);
+    try {
+      const response = await api.addTracksToQueue(result.tracks, currentRequester);
+      if (response.success && response.data) {
+        showToast({
+          message: `已加入 ${response.data.count} 首歌曲`,
+          type: "success",
+        });
+      } else {
+        showToast({
+          message: response.error || "加入整組內容失敗",
+          type: "error",
+        });
+      }
+    } catch {
+      showToast({ message: "加入整組內容發生錯誤", type: "error" });
+    } finally {
+      setAddingCollectionId(null);
+    }
+  };
+
   const handleCreateMix = async (track: Track) => {
     setCreatingMixId(track.videoId);
     try {
@@ -89,6 +118,34 @@ export const MobileContent = () => {
     }
   };
 
+  const handleAddToPlaylist = (track: Track) => {
+    if (!libraryReady) {
+      showToast({ message: "媒體庫正在初始化", type: "info" });
+      return;
+    }
+
+    openPlaylistPicker(track);
+  };
+
+  const handleToggleFavorite = async (track: Track) => {
+    if (!libraryReady) {
+      showToast({ message: "媒體庫正在初始化", type: "info" });
+      return;
+    }
+
+    const wasFavorite = favoriteTrackIds.has(track.videoId);
+
+    try {
+      await toggleFavorite(track);
+      showToast({
+        message: wasFavorite ? "已移除收藏" : "已加入收藏",
+        type: "success",
+      });
+    } catch {
+      showToast({ message: "收藏更新失敗", type: "error" });
+    }
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col pb-[168px] lg:hidden">
       <form onSubmit={handleSearch} className="shrink-0 px-4 py-4">
@@ -96,7 +153,7 @@ export const MobileContent = () => {
           <Input
             ref={inputRef}
             type="text"
-            placeholder="搜尋歌曲或藝人..."
+            placeholder="搜尋歌曲、藝人或貼上 YouTube 連結..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             disabled={isSearching}
@@ -129,7 +186,7 @@ export const MobileContent = () => {
         </div>
       </form>
 
-      <ScrollArea className="flex-1 px-4 min-h-0" maxHeight="none">
+      <ScrollArea className="min-h-0 flex-1 px-4" maxHeight="none">
         {isSearching ? (
           <div className="flex justify-center py-12">
             <Spinner size="lg" />
@@ -137,99 +194,34 @@ export const MobileContent = () => {
         ) : searchResults.length > 0 ? (
           <div className="space-y-3 pb-4">
             {searchResults.map((result) => (
-              <MobileSearchResultCard
-                key={result.videoId}
+              <SearchResultItem
+                key={`${result.kind}:${result.id}`}
                 result={result}
                 onAdd={handleAddToQueue}
                 onCreateMix={handleCreateMix}
-                onAddToPlaylist={openPlaylistPicker}
-                isAdding={addingId === result.videoId}
-                isCreatingMix={creatingMixId === result.videoId}
+                onAddToPlaylist={handleAddToPlaylist}
+                onToggleFavorite={handleToggleFavorite}
+                onAddCollection={handleAddCollection}
+                favoriteTrackIds={favoriteTrackIds}
+                favoriteDisabled={!libraryReady}
+                isAdding={result.kind === "track" && addingId === result.id}
+                isCreatingMix={
+                  result.kind === "track" && creatingMixId === result.id
+                }
+                isCollectionPending={
+                  result.kind !== "track" && addingCollectionId === result.id
+                }
+                pendingTrackId={addingId}
               />
             ))}
           </div>
         ) : (
-          <Empty title="尚無搜尋結果" description="輸入關鍵字開始搜尋音樂" />
+          <Empty
+            title="尚無搜尋結果"
+            description="輸入關鍵字或貼上 YouTube 連結開始搜尋"
+          />
         )}
       </ScrollArea>
     </div>
-  );
-};
-
-// COSSUI 風格的搜尋結果卡片
-interface MobileSearchResultCardProps {
-  result: Track;
-  onAdd: (track: Track) => void;
-  onCreateMix: (track: Track) => void;
-  onAddToPlaylist: (track: Track) => void;
-  isAdding?: boolean;
-  isCreatingMix?: boolean;
-}
-
-const MobileSearchResultCard = ({
-  result,
-  onAdd,
-  onCreateMix,
-  onAddToPlaylist,
-  isAdding,
-  isCreatingMix,
-}: MobileSearchResultCardProps) => {
-  return (
-    <Card className="surface-card rounded-[26px] p-4">
-      <div className="flex items-center gap-3">
-        <Avatar
-          src={result.thumbnail}
-          alt={result.title}
-          size="lg"
-          className="rounded-[18px] border border-[color:var(--surface-border)]"
-        />
-        <div className="flex-1 min-w-0">
-          <h3 className="truncate text-sm font-semibold text-[var(--text-primary)]">
-            {result.title}
-          </h3>
-          <p className="truncate text-xs text-[var(--text-secondary)]">
-            {result.artist}
-          </p>
-          <OpenAlbumButton
-            album={result.album}
-            trackTitle={result.title}
-            className="mt-1"
-          />
-          <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-            {formatTime(result.duration)}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-9 w-9 rounded-[14px] px-0"
-            onClick={() => onAddToPlaylist(result)}
-            disabled={isAdding || isCreatingMix}
-          >
-            <Library className="h-4 w-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-9 rounded-[14px] px-3"
-            onClick={() => onCreateMix(result)}
-            disabled={isAdding || isCreatingMix}
-          >
-            {isCreatingMix ? "建立中" : "Mix"}
-          </Button>
-          <Button
-            onClick={() => onAdd(result)}
-            disabled={isAdding || isCreatingMix}
-            size="sm"
-            className="h-9 shrink-0 rounded-[14px] px-4 text-sm shadow-[0_18px_30px_-20px_var(--accent-glow)]"
-          >
-            {isAdding ? "加入中..." : "加入"}
-          </Button>
-        </div>
-      </div>
-    </Card>
   );
 };

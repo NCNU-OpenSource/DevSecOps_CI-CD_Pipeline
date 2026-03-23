@@ -206,7 +206,7 @@ api.get("/artwork-proxy", async (c) => {
 
 /**
  * GET /api/search?q={query}
- * 搜尋歌曲
+ * 搜尋歌曲或支援的 YouTube 連結
  */
 api.get("/search", async (c) => {
   const query = c.req.query("q");
@@ -277,6 +277,62 @@ api.post("/queue", async (c) => {
       {
         success: false,
         error: "Failed to add to queue",
+      },
+      500,
+    );
+  }
+});
+
+/**
+ * POST /api/queue/batch
+ * 批次加入歌曲到播放清單
+ */
+api.post("/queue/batch", async (c) => {
+  try {
+    const body = await c.req.json<{
+      tracks: Track[];
+      requestedBy?: Track["requestedBy"];
+    }>();
+
+    if (!Array.isArray(body.tracks) || body.tracks.length === 0) {
+      return c.json<ApiResponse>(
+        {
+          success: false,
+          error: "tracks is required",
+        },
+        400,
+      );
+    }
+
+    const normalizedTracks = body.tracks.filter((track) => Boolean(track?.videoId));
+    if (normalizedTracks.length === 0) {
+      return c.json<ApiResponse>(
+        {
+          success: false,
+          error: "tracks is required",
+        },
+        400,
+      );
+    }
+
+    const queueService = getQueueService();
+    await queueService.appendTracksToQueue(normalizedTracks, "manual", {
+      requestedBy: parseRequester(body.requestedBy),
+    });
+
+    return c.json<ApiResponse>({
+      success: true,
+      data: {
+        message: `Added ${normalizedTracks.length} tracks to queue`,
+        count: normalizedTracks.length,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to batch add to queue:", error);
+    return c.json<ApiResponse>(
+      {
+        success: false,
+        error: "Failed to add tracks to queue",
       },
       500,
     );

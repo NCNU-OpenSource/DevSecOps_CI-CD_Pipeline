@@ -15,6 +15,7 @@ const trackOne = {
 
 const baseSnapshot: LibrarySnapshot = {
   profileId: "profile-a",
+  profileName: "Profile A",
   deviceId: "device-a",
   updatedAt: "2026-03-15T00:00:00.000Z",
   syncSessionId: "session-a",
@@ -30,7 +31,11 @@ const baseSnapshot: LibrarySnapshot = {
     {
       id: "device-a",
       name: "Desktop A",
+      reportedName: "Desktop A",
+      customName: null,
+      displayName: "Desktop A",
       kind: "desktop",
+      metadata: null,
       pairedAt: "2026-03-15T00:00:00.000Z",
       isCurrentDevice: true,
       status: "available",
@@ -230,7 +235,11 @@ describe("library sync helpers", () => {
       {
         id: "device-a",
         name: "Desktop A",
+        reportedName: "Desktop A",
+        customName: null,
+        displayName: "Desktop A",
         kind: "desktop",
+        metadata: null,
         connected: true,
         pairedAt: "2026-03-15T00:00:00.000Z",
         lastSeenAt: "2026-03-15T00:00:00.000Z",
@@ -238,7 +247,11 @@ describe("library sync helpers", () => {
       {
         id: "device-b",
         name: "Phone B",
+        reportedName: "Phone B",
+        customName: null,
+        displayName: "Phone B",
         kind: "mobile",
+        metadata: null,
         connected: false,
         pairedAt: "2026-03-15T00:10:00.000Z",
         lastSeenAt: "2026-03-15T00:20:00.000Z",

@@ -17,7 +17,10 @@ export const PlaybackControls = ({
   const currentTrack = usePlayerStore(
     (state) => state.playbackState.currentTrack,
   );
+  const nextTrack = usePlayerStore((state) => state.playbackState.queue[0] ?? null);
+  const radioEnabled = usePlayerStore((state) => state.playbackState.radioEnabled);
   const isLoadingTrack = usePlayerStore((state) => state.isLoadingTrack);
+  const setLoadingTrack = usePlayerStore((state) => state.setLoadingTrack);
 
   const handlePlayPause = async () => {
     // 載入中時不允許操作
@@ -31,7 +34,28 @@ export const PlaybackControls = ({
   };
 
   const handleSkip = async () => {
-    await api.skip();
+    if (!currentTrack || isLoadingTrack) {
+      return;
+    }
+
+    const shouldShowLoading = radioEnabled || nextTrack !== null;
+    if (shouldShowLoading) {
+      setLoadingTrack(
+        true,
+        nextTrack
+          ? `正在載入「${nextTrack.title}」...`
+          : "正在準備下一首...",
+      );
+    }
+
+    try {
+      await api.skip();
+    } catch (error) {
+      if (shouldShowLoading) {
+        setLoadingTrack(false);
+      }
+      console.error("跳過失敗:", error);
+    }
   };
 
   return (
@@ -61,7 +85,7 @@ export const PlaybackControls = ({
           variant="outline"
           size="lg"
           onClick={handleSkip}
-          disabled={!currentTrack}
+          disabled={!currentTrack || isLoadingTrack}
           title="跳過"
           className="h-[52px] w-[52px] shrink-0 rounded-full px-0"
         >

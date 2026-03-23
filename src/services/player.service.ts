@@ -2,6 +2,7 @@ import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { connect, type Socket } from "node:net";
 import { log } from "../utils/logger.ts";
 import { getMpvYtdlRawOptions } from "../utils/ytdlp.ts";
+import { getMpvExecutable } from "../utils/runtime-dependencies.ts";
 
 export type PlayerEventCallback = (event: {
   timePos?: number;
@@ -12,6 +13,7 @@ export type PlayerEventCallback = (event: {
 
 class PlayerService {
   private static instance: PlayerService;
+  private readonly playbackConfirmationTimeoutMs = 2500;
   private mpvProcess: ChildProcess | null = null;
   private intentionallyStoppedProcesses = new WeakSet<ChildProcess>();
   private ipcSocket: Socket | null = null;
@@ -24,6 +26,14 @@ class PlayerService {
   private readonly maxIpcRetries = 60;
   private playSessionId = 0;
   private eofHandled = false;
+  private pendingPlaybackConfirmation:
+    | {
+        process: ChildProcess;
+        timer: ReturnType<typeof setTimeout>;
+        confirm: () => void;
+        reject: (error: Error) => void;
+      }
+    | null = null;
 
   private constructor() {
     // 在啟動時清理可能殘留的舊 mpv 進程
@@ -119,9 +129,16 @@ class PlayerService {
       const attemptConnect = () => {
         log.debug("Attempting IPC connection", { path: this.ipcPath });
 
-        this.ipcSocket = connect(this.ipcPath!);
+        const socket = connect(this.ipcPath!);
+        this.ipcSocket = socket;
 
-        this.ipcSocket.on("connect", () => {
+        socket.on("connect", () => {
+          if (this.ipcSocket !== socket) {
+            log.debug("Ignoring stale IPC socket connection");
+            socket.destroy();
+            return;
+          }
+
           log.info("IPC socket connected");
           this.ipcConnectRetries = 0;
 
@@ -135,11 +152,21 @@ class PlayerService {
           resolve();
         });
 
-        this.ipcSocket.on("data", (data: Buffer) => {
+        socket.on("data", (data: Buffer) => {
+          if (this.ipcSocket !== socket) {
+            log.debug("Ignoring stale IPC socket payload");
+            return;
+          }
+
           this.handleIpcMessage(data.toString());
         });
 
-        this.ipcSocket.on("error", (err: Error) => {
+        socket.on("error", (err: Error) => {
+          if (this.ipcSocket !== socket) {
+            log.debug("Ignoring stale IPC socket error", { error: err.message });
+            return;
+          }
+
           log.debug("IPC socket error", { error: err.message });
 
           const maxRetries =
@@ -163,7 +190,11 @@ class PlayerService {
           }
         });
 
-        this.ipcSocket.on("close", () => {
+        socket.on("close", () => {
+          if (this.ipcSocket !== socket) {
+            return;
+          }
+
           log.debug("IPC socket closed");
           this.ipcSocket = null;
         });
@@ -226,8 +257,6 @@ class PlayerService {
       log.info("Property change", { name: message.name, data: message.data });
     }
 
-    if (!this.eventCallback) return;
-
     const event: {
       timePos?: number;
       duration?: number;
@@ -238,6 +267,9 @@ class PlayerService {
     switch (message.name) {
       case "time-pos":
         event.timePos = message.data as number;
+        if (typeof message.data === "number" && message.data > 0) {
+          this.confirmPlaybackStarted();
+        }
         break;
 
       case "duration":
@@ -270,7 +302,79 @@ class PlayerService {
         break;
     }
 
+    if (!this.eventCallback) return;
+
     this.eventCallback(event);
+  }
+
+  private beginPlaybackConfirmation(
+    process: ChildProcess,
+    handleSuccess: () => void,
+    handleError: (err: Error) => void,
+  ): void {
+    this.clearPlaybackConfirmation();
+
+    const confirm = () => {
+      if (this.pendingPlaybackConfirmation?.process !== process) {
+        return;
+      }
+
+      clearTimeout(this.pendingPlaybackConfirmation.timer);
+      this.pendingPlaybackConfirmation = null;
+      handleSuccess();
+    };
+
+    const reject = (error: Error) => {
+      if (this.pendingPlaybackConfirmation?.process !== process) {
+        return;
+      }
+
+      clearTimeout(this.pendingPlaybackConfirmation.timer);
+      this.pendingPlaybackConfirmation = null;
+      handleError(error);
+    };
+
+    const timer = setTimeout(() => {
+      log.info("Playback confirmation timeout elapsed; treating playback as started", {
+        timeoutMs: this.playbackConfirmationTimeoutMs,
+      });
+      confirm();
+    }, this.playbackConfirmationTimeoutMs);
+
+    this.pendingPlaybackConfirmation = {
+      process,
+      timer,
+      confirm,
+      reject,
+    };
+  }
+
+  private confirmPlaybackStarted(): void {
+    this.pendingPlaybackConfirmation?.confirm();
+  }
+
+  private rejectPlaybackConfirmation(
+    process: ChildProcess,
+    error: Error,
+  ): boolean {
+    if (this.pendingPlaybackConfirmation?.process !== process) {
+      return false;
+    }
+
+    this.pendingPlaybackConfirmation.reject(error);
+    return true;
+  }
+
+  private clearPlaybackConfirmation(process?: ChildProcess): void {
+    if (
+      !this.pendingPlaybackConfirmation ||
+      (process && this.pendingPlaybackConfirmation.process !== process)
+    ) {
+      return;
+    }
+
+    clearTimeout(this.pendingPlaybackConfirmation.timer);
+    this.pendingPlaybackConfirmation = null;
   }
 
   private markProcessAsIntentionallyStopped(
@@ -314,12 +418,14 @@ class PlayerService {
     }
 
     if (intentionallyStopped) {
+      this.clearPlaybackConfirmation(spawnedProcess);
       log.info("Ignoring exit from intentionally stopped mpv process");
       handleSuccess();
       return;
     }
 
     if (code === 0) {
+      this.clearPlaybackConfirmation(spawnedProcess);
       log.info("Checking if need to trigger EOF from exit", {
         eofHandled: this.eofHandled,
       });
@@ -330,6 +436,15 @@ class PlayerService {
       }
       handleSuccess();
     } else if (code !== null && code > 0) {
+      if (
+        this.rejectPlaybackConfirmation(
+          spawnedProcess,
+          new Error(`mpv exited with code ${code}`),
+        )
+      ) {
+        return;
+      }
+
       handleError(new Error(`mpv exited with code ${code}`));
     }
   }
@@ -394,7 +509,7 @@ class PlayerService {
           url,
         ];
 
-        const mpvCommand = process.platform === "win32" ? "mpv.exe" : "mpv";
+        const mpvCommand = getMpvExecutable();
 
         log.info("Spawning mpv process", {
           command: mpvCommand,
@@ -433,7 +548,11 @@ class PlayerService {
           this.connectIpc()
             .then(() => {
               log.info("IPC connected successfully");
-              handleSuccess();
+              this.beginPlaybackConfirmation(
+                spawnedProcess,
+                handleSuccess,
+                handleError,
+              );
             })
             .catch((error) => {
               log.error(
@@ -555,7 +674,7 @@ class PlayerService {
           streamUrl, // 直接使用串流 URL
         ];
 
-        const mpvCommand = process.platform === "win32" ? "mpv.exe" : "mpv";
+        const mpvCommand = getMpvExecutable();
 
         log.info("Spawning mpv process for stream URL", {
           command: mpvCommand,
@@ -595,7 +714,11 @@ class PlayerService {
           this.connectIpc()
             .then(() => {
               log.info("IPC connected successfully");
-              handleSuccess();
+              this.beginPlaybackConfirmation(
+                spawnedProcess,
+                handleSuccess,
+                handleError,
+              );
             })
             .catch((error) => {
               log.error(
@@ -754,6 +877,7 @@ class PlayerService {
     this.ipcConnectRetries = 0;
     this.playSessionId = 0;
     this.eofHandled = false;
+    this.clearPlaybackConfirmation();
   }
 }
 

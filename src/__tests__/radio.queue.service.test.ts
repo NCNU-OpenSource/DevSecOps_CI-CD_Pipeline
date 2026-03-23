@@ -82,10 +82,19 @@ describe("QueueService radio mode", () => {
     const queueService = getQueueService();
     const playerService = getPlayerService();
     const musicService = getMusicService();
+    const trackLoadingEvents: Array<{ track: Track | null; message?: string }> = [];
     const playUrlCalls: string[] = [];
     const mixSeeds: string[] = [];
+    let stopCalls = 0;
+
+    queueService.onTrackLoading((payload) => {
+      trackLoadingEvents.push(payload);
+    });
 
     stubMethod(playerService, "isCurrentlyPlaying", () => false);
+    stubMethod(playerService, "stop", () => {
+      stopCalls++;
+    });
     stubMethod(playerService, "play", async () => {
       throw new Error("play() should not be used when playUrl() succeeds");
     });
@@ -99,7 +108,7 @@ describe("QueueService radio mode", () => {
     stubMethod(musicService, "getStreamUrl", async (videoId: string) => {
       return {
         url: `https://stream/${videoId}`,
-        source: "youtube-ext" as const,
+        source: "youtubei" as const,
       };
     });
     stubMethod(musicService, "getLyrics", async () => []);
@@ -115,6 +124,7 @@ describe("QueueService radio mode", () => {
       "https://stream/base-track",
       "https://stream/radio-1",
     ]);
+    expect(stopCalls).toBe(1);
     expect(mixSeeds[0]).toBe(baseTrack.videoId);
     expect(state.radioEnabled).toBe(true);
     expect(state.lastPlayedTrack?.videoId).toBe("base-track");
@@ -122,6 +132,26 @@ describe("QueueService radio mode", () => {
     expect(state.queue[0]?.videoId).toBe("radio-2");
     expect(state.queue[0]?.queueOrigin).toBe("radio");
     expect(state.queue[0]?.radioGenerated).toBe(true);
+    expect(trackLoadingEvents).toEqual([
+      {
+        track: {
+          ...baseTrack,
+          queueOrigin: "manual",
+          radioGenerated: false,
+        },
+      },
+      {
+        track: null,
+        message: "正在準備下一首...",
+      },
+      {
+        track: {
+          ...radioTracks[0],
+          queueOrigin: "radio",
+          radioGenerated: true,
+        },
+      },
+    ]);
   });
 
   test("should keep manually added tracks ahead of radio-generated tracks", async () => {
@@ -138,7 +168,7 @@ describe("QueueService radio mode", () => {
     stubMethod(musicService, "getStreamUrl", async (videoId: string) => {
       return {
         url: `https://stream/${videoId}`,
-        source: "youtube-ext" as const,
+        source: "youtubei" as const,
       };
     });
     stubMethod(musicService, "getLyrics", async () => []);
@@ -177,7 +207,7 @@ describe("QueueService radio mode", () => {
     stubMethod(musicService, "getStreamUrl", async (videoId: string) => {
       return {
         url: `https://stream/${videoId}`,
-        source: "youtube-ext" as const,
+        source: "youtubei" as const,
       };
     });
     stubMethod(musicService, "getLyrics", async () => []);

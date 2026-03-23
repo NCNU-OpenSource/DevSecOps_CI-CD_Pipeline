@@ -29,7 +29,7 @@ import {
   TabsContent,
 } from "@/components/ui/tabs";
 
-function App() {
+function AppContent() {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [desktopActiveTab, setDesktopActiveTab] = useState("lyrics");
   const desktopMode = useAppUiStore((state) => state.desktopMode);
@@ -58,7 +58,7 @@ function App() {
   });
 
   return (
-    <ToastProvider>
+    <>
       <MainLayout onSearchClick={handleSearchOpen} artworkTheme={artworkTheme}>
         {/* 桌面版：雙欄佈局 */}
         <div
@@ -148,6 +148,14 @@ function App() {
       />
       <AlbumDialog />
       <PlaylistPickerDialog />
+    </>
+  );
+}
+
+function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
     </ToastProvider>
   );
 }

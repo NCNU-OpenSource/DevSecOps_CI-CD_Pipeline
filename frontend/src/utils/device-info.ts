@@ -21,6 +21,16 @@ export interface RuntimeDeviceInfo {
   metadata: SyncDeviceMetadata | null;
 }
 
+function getDefaultNavigator(): NavigatorWithUAData {
+  const navigatorLike = globalThis.navigator as NavigatorWithUAData | undefined;
+
+  if (!navigatorLike) {
+    throw new Error("Navigator is not available in this environment");
+  }
+
+  return navigatorLike;
+}
+
 function detectKind(userAgent: string, navigatorLike: NavigatorWithUAData): SyncDeviceKind {
   if (typeof navigatorLike.userAgentData?.mobile === "boolean") {
     return navigatorLike.userAgentData.mobile ? "mobile" : "desktop";
@@ -189,7 +199,7 @@ export function formatDeviceDetail(
 }
 
 export function detectDeviceInfoSync(
-  navigatorLike: NavigatorWithUAData = window.navigator as NavigatorWithUAData,
+  navigatorLike: NavigatorWithUAData = getDefaultNavigator(),
 ): RuntimeDeviceInfo {
   const userAgent = navigatorLike.userAgent ?? "";
   const kind = detectKind(userAgent, navigatorLike);
@@ -205,7 +215,7 @@ export function detectDeviceInfoSync(
 }
 
 export async function detectDeviceInfo(
-  navigatorLike: NavigatorWithUAData = window.navigator as NavigatorWithUAData,
+  navigatorLike: NavigatorWithUAData = getDefaultNavigator(),
 ): Promise<RuntimeDeviceInfo> {
   const base = detectDeviceInfoSync(navigatorLike);
   const metadata: SyncDeviceMetadata = {

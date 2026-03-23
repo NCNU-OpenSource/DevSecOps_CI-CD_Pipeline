@@ -1,10 +1,52 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  __resetMusicServiceForTests,
+  getMusicService,
   normalizeMixTracks,
   normalizeMusicSearchItem,
+  resolveCollectionArtist,
 } from "../services/music.service.ts";
+import type { SearchResult } from "../types/index.ts";
+
+type RestorableMethod = {
+  target: Record<string, unknown>;
+  key: string;
+  original: unknown;
+};
+
+const restores: RestorableMethod[] = [];
+
+function stubMethod<T extends object, K extends keyof T>(
+  target: T,
+  key: K,
+  replacement: T[K],
+): void {
+  restores.push({
+    target: target as Record<string, unknown>,
+    key: key as string,
+    original: target[key],
+  });
+  target[key] = replacement;
+}
+
+function restoreMethods(): void {
+  while (restores.length > 0) {
+    const restore = restores.pop()!;
+    restore.target[restore.key] = restore.original;
+  }
+}
 
 describe("MusicService mix normalization", () => {
+  beforeEach(() => {
+    restoreMethods();
+    __resetMusicServiceForTests();
+  });
+
+  afterEach(() => {
+    restoreMethods();
+    __resetMusicServiceForTests();
+  });
+
   test("should normalize valid mix items and apply field fallbacks", () => {
     const tracks = normalizeMixTracks(
       [
@@ -140,5 +182,103 @@ describe("MusicService mix normalization", () => {
         artists: [{ name: "Unknown Artist" }],
       }),
     ).toBeNull();
+  });
+
+  test("should fall back to subtitle and first track artist for mix collection authors", () => {
+    expect(
+      resolveCollectionArtist({
+        kind: "mix",
+        subtitle: "Ru's Piano Ru味春捲 • 200 首歌曲",
+      }),
+    ).toBe("Ru's Piano Ru味春捲");
+
+    expect(
+      resolveCollectionArtist({
+        kind: "mix",
+        fallbackTrackArtist: "Ru's Piano Ru味春捲",
+      }),
+    ).toBe("Ru's Piano Ru味春捲");
+  });
+
+  test("should return URL search results without falling back to keyword search", async () => {
+    const musicService = getMusicService() as unknown as {
+      search: (query: string, limit?: number) => Promise<SearchResult[]>;
+      resolveUrlSearch: (query: unknown, limit: number) => Promise<SearchResult[]>;
+      searchByKeyword: (query: string, limit: number) => Promise<SearchResult[]>;
+    };
+    let keywordSearchCalled = false;
+
+    stubMethod(musicService, "resolveUrlSearch", async () => [
+      {
+        kind: "track",
+        id: "track-1",
+        title: "URL Track",
+        artist: "Artist A",
+        duration: 180,
+        track: {
+          videoId: "track-1",
+          title: "URL Track",
+          artist: "Artist A",
+          duration: 180,
+        },
+      },
+    ]);
+    stubMethod(musicService, "searchByKeyword", async () => {
+      keywordSearchCalled = true;
+      return [];
+    });
+
+    const results = await musicService.search("https://youtu.be/track-1");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      kind: "track",
+      id: "track-1",
+      title: "URL Track",
+    });
+    expect(keywordSearchCalled).toBe(false);
+  });
+
+  test("should fall back to keyword search when URL resolution returns no results", async () => {
+    const musicService = getMusicService() as unknown as {
+      search: (query: string, limit?: number) => Promise<SearchResult[]>;
+      resolveUrlSearch: (query: unknown, limit: number) => Promise<SearchResult[]>;
+      searchByKeyword: (query: string, limit: number) => Promise<SearchResult[]>;
+    };
+
+    stubMethod(musicService, "resolveUrlSearch", async () => []);
+    stubMethod(musicService, "searchByKeyword", async () => [
+      {
+        kind: "track",
+        id: "keyword-track",
+        title: "Keyword Track",
+        artist: "Artist B",
+        duration: 200,
+        track: {
+          videoId: "keyword-track",
+          title: "Keyword Track",
+          artist: "Artist B",
+          duration: 200,
+        },
+      },
+    ]);
+
+    const results = await musicService.search("https://www.youtube.com/watch?v=keyword-track");
+
+    expect(results).toEqual([
+      {
+        kind: "track",
+        id: "keyword-track",
+        title: "Keyword Track",
+        artist: "Artist B",
+        duration: 200,
+        track: {
+          videoId: "keyword-track",
+          title: "Keyword Track",
+          artist: "Artist B",
+          duration: 200,
+        },
+      },
+    ]);
   });
 });

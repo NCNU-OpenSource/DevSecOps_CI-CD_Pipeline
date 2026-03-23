@@ -171,7 +171,7 @@ describe("QueueService mix creation", () => {
       });
     });
     stubMethod(musicService, "getStreamUrl", async () => {
-      return { url: "https://stream/base-track", source: "youtube-ext" as const };
+      return { url: "https://stream/base-track", source: "youtubei" as const };
     });
     stubMethod(musicService, "getLyrics", async () => []);
 
@@ -253,7 +253,7 @@ describe("QueueService mix creation", () => {
       throw new Error("up next failed");
     });
     stubMethod(musicService, "getStreamUrl", async () => {
-      return { url: "https://stream/base-track", source: "youtube-ext" as const };
+      return { url: "https://stream/base-track", source: "youtubei" as const };
     });
     stubMethod(musicService, "getLyrics", async () => []);
 
@@ -300,7 +300,7 @@ describe("QueueService mix creation", () => {
     });
     stubMethod(musicService, "getMixTracks", async () => mixTracks);
     stubMethod(musicService, "getStreamUrl", async () => {
-      return { url: "https://stream/base-track", source: "youtube-ext" as const };
+      return { url: "https://stream/base-track", source: "youtubei" as const };
     });
     stubMethod(musicService, "getLyrics", async () => []);
 
@@ -333,7 +333,7 @@ describe("QueueService mix creation", () => {
     });
     stubMethod(musicService, "getMixTracks", async () => mixTracks);
     stubMethod(musicService, "getStreamUrl", async () => {
-      return { url: "https://stream/base-track", source: "youtube-ext" as const };
+      return { url: "https://stream/base-track", source: "youtubei" as const };
     });
     stubMethod(musicService, "getLyrics", async () => []);
 
@@ -358,7 +358,7 @@ describe("QueueService mix creation", () => {
     });
     stubMethod(musicService, "getMixTracks", async () => mixTracks);
     stubMethod(musicService, "getStreamUrl", async () => {
-      return { url: "https://stream/base-track", source: "youtube-ext" as const };
+      return { url: "https://stream/base-track", source: "youtubei" as const };
     });
     stubMethod(musicService, "getLyrics", async () => []);
 

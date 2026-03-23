@@ -10,6 +10,8 @@ export interface TrackAlbum {
   name: string;
 }
 
+export type SearchCollectionKind = "album" | "playlist" | "mix";
+
 // 歌曲資訊
 export interface Track {
   videoId: string;
@@ -32,6 +34,30 @@ export interface AlbumDetails {
   thumbnail?: string;
   tracks: Track[];
 }
+
+export interface TrackSearchResult {
+  kind: "track";
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail?: string;
+  duration: number;
+  track: Track;
+}
+
+export interface CollectionSearchResult {
+  kind: SearchCollectionKind;
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail?: string;
+  trackCount: number;
+  tracks: Track[];
+  truncated: boolean;
+  subtitle?: string;
+}
+
+export type SearchResult = TrackSearchResult | CollectionSearchResult;
 
 // 歌詞行
 export interface LyricLine {
@@ -60,6 +86,8 @@ export interface PlaybackProgress {
 
 // WebSocket 訊息類型
 export type WSMessage =
+  | { type: "track_loading"; track: Track | null; message?: string }
+  | { type: "track_ready"; track: Track }
   | { type: "now_playing"; track: Track; position: number; duration: number }
   | { type: "queue_updated"; queue: Track[] }
   | { type: "lyrics"; lyrics: LyricLine[] }
@@ -84,6 +112,6 @@ export interface ApiResponse<T = unknown> {
 // 串流 URL 結果
 export interface StreamUrlResult {
   url: string;
-  source: "youtube-ext" | "invidious" | "yt-dlp";
+  source: "youtubei" | "invidious" | "yt-dlp";
   bitrate?: number;
 }

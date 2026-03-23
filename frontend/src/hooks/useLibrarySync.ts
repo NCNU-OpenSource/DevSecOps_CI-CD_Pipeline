@@ -3,19 +3,10 @@ import { api } from "@/services/api";
 import { useLibraryStore, getCurrentDevice } from "@/stores/libraryStore";
 import { detectDeviceInfo } from "@/utils/device-info";
 import { toSyncedLibraryPayload } from "@/utils/librarySync";
+import { getWebSocketUrl } from "@/utils/websocket-url";
 import type { SyncSessionDevice, SyncedLibraryPayload } from "@/types/library";
 
 const SNAPSHOT_SYNC_DEBOUNCE_MS = 400;
-
-function getSyncWebSocketUrl(): string {
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-
-  if (import.meta.env.DEV) {
-    return "ws://localhost:3000/ws/sync";
-  }
-
-  return `${protocol}://${window.location.host}/ws/sync`;
-}
 
 export function useLibrarySync(): void {
   const [socketAttempt, setSocketAttempt] = useState(0);
@@ -183,7 +174,7 @@ export function useLibrarySync(): void {
       return;
     }
 
-    const ws = new WebSocket(getSyncWebSocketUrl());
+    const ws = new WebSocket(getWebSocketUrl("/ws/sync"));
     let closedIntentionally = false;
     socketRef.current = ws;
     setSyncStatus("connecting", { error: null });

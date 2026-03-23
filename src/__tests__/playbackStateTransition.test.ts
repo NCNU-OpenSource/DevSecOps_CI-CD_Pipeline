@@ -130,4 +130,35 @@ describe("mergePlaybackStateDuringTrackTransition", () => {
       mergePlaybackStateDuringTrackTransition(incomingState, previousState),
     ).toBe(incomingState);
   });
+
+  test("should promote the next queue head instead of preserving stale progress", () => {
+    const previousState = createPlaybackState({
+      currentTrack: createTrack({
+        videoId: "track-previous",
+        title: "Previous Track",
+        duration: 240,
+      }),
+      position: 123,
+      duration: 240,
+    });
+    const queueHead = createTrack({
+      videoId: "track-next",
+      title: "Next Track",
+      artist: "Next Artist",
+      duration: 201,
+    });
+    const incomingState = createPlaybackState({
+      currentTrack: null,
+      queue: [queueHead],
+    });
+
+    const mergedState = mergePlaybackStateDuringTrackTransition(
+      incomingState,
+      previousState,
+    );
+
+    expect(mergedState.currentTrack).toEqual(queueHead);
+    expect(mergedState.position).toBe(0);
+    expect(mergedState.duration).toBe(queueHead.duration);
+  });
 });

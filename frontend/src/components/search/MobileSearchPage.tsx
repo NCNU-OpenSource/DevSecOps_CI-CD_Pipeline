@@ -2,8 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
-import { Avatar } from "@/components/ui/avatar";
 import { Empty } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,12 +9,16 @@ import { useToast } from "@/components/ui/toast";
 import { usePlayerStore } from "@/stores/playerStore";
 import { getCurrentRequester, useLibraryStore } from "@/stores/libraryStore";
 import { api } from "@/services/api";
-import { formatTime } from "@/utils/format";
-import type { Track } from "@/types";
+import { SearchResultItem } from "./SearchResultItem";
+import type { CollectionSearchResult, Track } from "@/types";
+
+const EMPTY_FAVORITES: Array<{ videoId: string }> = [];
 
 export const MobileSearchPage = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
+  const [creatingMixId, setCreatingMixId] = useState<string | null>(null);
+  const [addingCollectionId, setAddingCollectionId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [isAnimating, setIsAnimating] = useState(false);
 
@@ -29,16 +31,24 @@ export const MobileSearchPage = () => {
   );
   const searchResults = usePlayerStore((state) => state.searchResults);
   const setSearchResults = usePlayerStore((state) => state.setSearchResults);
+  const libraryReady = useLibraryStore((state) => state.ready);
+  const favorites = useLibraryStore(
+    (state) => state.snapshot?.favorites ?? EMPTY_FAVORITES,
+  );
   const currentRequester = useLibraryStore((state) =>
     getCurrentRequester(state.snapshot),
   );
+  const openPlaylistPicker = useLibraryStore((state) => state.openPlaylistPicker);
+  const saveMix = useLibraryStore((state) => state.saveMix);
+  const toggleFavorite = useLibraryStore((state) => state.toggleFavorite);
   const { showToast } = useToast();
+  const favoriteTrackIds = new Set(
+    favorites.map((favorite) => favorite.videoId),
+  );
 
-  // 自動聚焦輸入框
   useEffect(() => {
     if (isMobileSearchOpen) {
       setIsAnimating(true);
-      // 延遲聚焦，等待動畫開始
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
@@ -63,12 +73,12 @@ export const MobileSearchPage = () => {
       if (response.success && response.data) {
         setSearchResults(response.data);
         if (response.data.length === 0) {
-          showToast({ message: "沒有找到相關歌曲", type: "info" });
+          showToast({ message: "沒有找到相關內容", type: "info" });
         }
       } else {
         showToast({ message: response.error || "搜尋失敗", type: "error" });
       }
-    } catch (error) {
+    } catch {
       showToast({ message: "搜尋發生錯誤", type: "error" });
     } finally {
       setIsSearching(false);
@@ -78,27 +88,92 @@ export const MobileSearchPage = () => {
   const handleAddToQueue = async (track: Track) => {
     setAddingId(track.videoId);
 
-    // 設定全域載入狀態
-    usePlayerStore
-      .getState()
-      .setLoadingTrack(true, `正在載入「${track.title}」...`);
-
     try {
       const response = await api.addToQueue(track, currentRequester);
       if (response.success) {
         showToast({ message: "已加入播放佇列", type: "success" });
       } else {
         showToast({ message: response.error || "加入失敗", type: "error" });
-        // 加入失敗時清除載入狀態
-        usePlayerStore.getState().setLoadingTrack(false);
       }
-    } catch (error) {
+    } catch {
       showToast({ message: "加入發生錯誤", type: "error" });
-      // 發生錯誤時清除載入狀態
-      usePlayerStore.getState().setLoadingTrack(false);
     } finally {
       setAddingId(null);
-      // 注意：載入狀態會由 WebSocket 播放事件清除
+    }
+  };
+
+  const handleAddCollection = async (result: CollectionSearchResult) => {
+    setAddingCollectionId(result.id);
+
+    try {
+      const response = await api.addTracksToQueue(result.tracks, currentRequester);
+      if (response.success && response.data) {
+        showToast({
+          message: `已加入 ${response.data.count} 首歌曲`,
+          type: "success",
+        });
+      } else {
+        showToast({
+          message: response.error || "加入整組內容失敗",
+          type: "error",
+        });
+      }
+    } catch {
+      showToast({ message: "加入整組內容發生錯誤", type: "error" });
+    } finally {
+      setAddingCollectionId(null);
+    }
+  };
+
+  const handleCreateMix = async (track: Track) => {
+    setCreatingMixId(track.videoId);
+
+    try {
+      const response = await api.createMix(track, currentRequester);
+      if (response.success && response.data) {
+        void saveMix(track, response.data.tracks);
+        showToast({
+          message: `已創建 Mix，加入 ${response.data.count} 首歌曲`,
+          type: "success",
+        });
+      } else {
+        showToast({
+          message: response.error || "創建 Mix 失敗",
+          type: "error",
+        });
+      }
+    } catch {
+      showToast({ message: "創建 Mix 發生錯誤", type: "error" });
+    } finally {
+      setCreatingMixId(null);
+    }
+  };
+
+  const handleAddToPlaylist = (track: Track) => {
+    if (!libraryReady) {
+      showToast({ message: "媒體庫正在初始化", type: "info" });
+      return;
+    }
+
+    openPlaylistPicker(track);
+  };
+
+  const handleToggleFavorite = async (track: Track) => {
+    if (!libraryReady) {
+      showToast({ message: "媒體庫正在初始化", type: "info" });
+      return;
+    }
+
+    const wasFavorite = favoriteTrackIds.has(track.videoId);
+
+    try {
+      await toggleFavorite(track);
+      showToast({
+        message: wasFavorite ? "已移除收藏" : "已加入收藏",
+        type: "success",
+      });
+    } catch {
+      showToast({ message: "收藏更新失敗", type: "error" });
     }
   };
 
@@ -110,16 +185,15 @@ export const MobileSearchPage = () => {
         isMobileSearchOpen ? "mobile-search-enter" : "mobile-search-exit"
       }`}
     >
-      {/* Header */}
-      <div className="sticky top-0 z-10 bg-white dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800">
+      <div className="sticky top-0 z-10 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950">
         <div className="flex items-center gap-4 px-4 py-3">
           <button
             onClick={handleClose}
-            className="p-2 -ml-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            className="-ml-2 rounded-lg p-2 text-gray-700 transition-colors hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
             aria-label="返回"
           >
             <svg
-              className="w-6 h-6"
+              className="h-6 w-6"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -137,21 +211,20 @@ export const MobileSearchPage = () => {
           </h1>
         </div>
 
-        {/* COSSUI 風格搜尋輸入框 */}
         <form onSubmit={handleSearch} className="px-4 pb-4">
           <div className="relative">
             <Input
               ref={inputRef}
               type="text"
-              placeholder="搜尋歌曲或藝人..."
+              placeholder="搜尋歌曲、藝人或貼上 YouTube 連結..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               disabled={isSearching}
-              className="w-full h-12 pl-12 pr-4 text-base bg-gray-100 dark:bg-gray-800 border-gray-200/64 dark:border-gray-700/64 rounded-xl focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-50"
+              className="h-12 w-full rounded-xl border-gray-200/64 bg-gray-100 pl-12 pr-4 text-base focus:ring-2 focus:ring-gray-900 dark:border-gray-700/64 dark:bg-gray-800 dark:focus:ring-gray-50"
             />
             <div className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
               <svg
-                className="w-5 h-5"
+                className="h-5 w-5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -168,7 +241,7 @@ export const MobileSearchPage = () => {
               <Button
                 type="submit"
                 disabled={isSearching}
-                className="absolute right-2 top-1/2 -translate-y-1/2 h-8 px-4 text-sm bg-gradient-to-r from-gray-900 to-gray-700 dark:from-gray-50 dark:to-gray-200 text-white dark:text-gray-900 rounded-lg hover:translate-y-0.5 transition-transform duration-200"
+                className="absolute right-2 top-1/2 h-8 -translate-y-1/2 rounded-lg bg-gradient-to-r from-gray-900 to-gray-700 px-4 text-sm text-white transition-transform duration-200 hover:translate-y-0.5 dark:from-gray-50 dark:to-gray-200 dark:text-gray-900"
               >
                 {isSearching ? <Spinner size="sm" /> : "搜尋"}
               </Button>
@@ -177,7 +250,6 @@ export const MobileSearchPage = () => {
         </form>
       </div>
 
-      {/* 搜尋結果 */}
       <ScrollArea className="h-[calc(100vh-140px)]">
         <div className="px-4 py-4">
           {isSearching ? (
@@ -187,16 +259,32 @@ export const MobileSearchPage = () => {
           ) : searchResults.length > 0 ? (
             <div className="space-y-3">
               {searchResults.map((result) => (
-                <MobileSearchResultCard
-                  key={result.videoId}
+                <SearchResultItem
+                  key={`${result.kind}:${result.id}`}
                   result={result}
                   onAdd={handleAddToQueue}
-                  isAdding={addingId === result.videoId}
+                  onCreateMix={handleCreateMix}
+                  onAddToPlaylist={handleAddToPlaylist}
+                  onToggleFavorite={handleToggleFavorite}
+                  onAddCollection={handleAddCollection}
+                  favoriteTrackIds={favoriteTrackIds}
+                  favoriteDisabled={!libraryReady}
+                  isAdding={result.kind === "track" && addingId === result.id}
+                  isCreatingMix={
+                    result.kind === "track" && creatingMixId === result.id
+                  }
+                  isCollectionPending={
+                    result.kind !== "track" && addingCollectionId === result.id
+                  }
+                  pendingTrackId={addingId}
                 />
               ))}
             </div>
           ) : (
-            <Empty title="尚無搜尋結果" description="輸入關鍵字開始搜尋音樂" />
+            <Empty
+              title="尚無搜尋結果"
+              description="輸入關鍵字或貼上 YouTube 連結開始搜尋"
+            />
           )}
         </div>
       </ScrollArea>
@@ -204,44 +292,4 @@ export const MobileSearchPage = () => {
   );
 
   return createPortal(content, document.body);
-};
-
-// COSSUI 風格的搜尋結果卡片
-interface MobileSearchResultCardProps {
-  result: Track;
-  onAdd: (track: Track) => void;
-  isAdding?: boolean;
-}
-
-const MobileSearchResultCard = ({
-  result,
-  onAdd,
-  isAdding,
-}: MobileSearchResultCardProps) => {
-  return (
-    <Card className="p-4 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800 shadow-md/5 hover:shadow-lg/10 transition-shadow duration-200">
-      <div className="flex items-center gap-3">
-        <Avatar src={result.thumbnail} alt={result.title} size="lg" />
-        <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-gray-900 dark:text-gray-50 truncate text-sm">
-            {result.title}
-          </h3>
-          <p className="text-xs text-gray-600 dark:text-gray-400 truncate">
-            {result.artist}
-          </p>
-          <p className="text-xs text-gray-500 dark:text-gray-500 mt-0.5">
-            {formatTime(result.duration)}
-          </p>
-        </div>
-        <Button
-          onClick={() => onAdd(result)}
-          disabled={isAdding}
-          size="sm"
-          className="shrink-0 h-9 px-4 text-sm bg-gradient-to-r from-gray-900 to-gray-700 dark:from-gray-50 dark:to-gray-200 text-white dark:text-gray-900 rounded-[14px] hover:translate-y-0.5 transition-transform duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isAdding ? "加入中..." : "加入"}
-        </Button>
-      </div>
-    </Card>
-  );
 };

@@ -1,4 +1,10 @@
-import type { AlbumDetails, ApiResponse, PlaybackState, Track } from "@/types";
+import type {
+  AlbumDetails,
+  ApiResponse,
+  PlaybackState,
+  SearchResult,
+  Track,
+} from "@/types";
 import type {
   SyncDeviceMetadata,
   SyncProfileResponse,
@@ -71,8 +77,8 @@ class ApiService {
   }
 
   // 搜尋音樂
-  async search(query: string): Promise<ApiResponse<Track[]>> {
-    return this.request<Track[]>(`/search?q=${encodeURIComponent(query)}`);
+  async search(query: string): Promise<ApiResponse<SearchResult[]>> {
+    return this.request<SearchResult[]>(`/search?q=${encodeURIComponent(query)}`);
   }
 
   // 加入到佇列
@@ -83,6 +89,16 @@ class ApiService {
     return this.request<{ message: string }>("/queue", {
       method: "POST",
       body: JSON.stringify({ track, requestedBy }),
+    });
+  }
+
+  async addTracksToQueue(
+    tracks: Track[],
+    requestedBy?: RequestedByPayload,
+  ): Promise<ApiResponse<{ message: string; count: number }>> {
+    return this.request<{ message: string; count: number }>("/queue/batch", {
+      method: "POST",
+      body: JSON.stringify({ tracks, requestedBy }),
     });
   }
 

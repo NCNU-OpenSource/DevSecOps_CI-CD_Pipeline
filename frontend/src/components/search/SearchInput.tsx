@@ -29,7 +29,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
         <Input
           ref={ref}
           type="text"
-          placeholder="搜尋歌曲或藝人..."
+          placeholder="搜尋歌曲、藝人或貼上 YouTube 連結..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={isLoading}

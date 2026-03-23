@@ -5,6 +5,10 @@ import path from "path";
 import { getAppMetadata } from "../src/utils/app-metadata.ts";
 
 const metadata = getAppMetadata();
+const devHost = process.env.VITE_DEV_HOST?.trim() || "127.0.0.1";
+const devPort = Number.parseInt(process.env.VITE_DEV_PORT || "5174", 10);
+const backendOrigin =
+  process.env.VITE_BACKEND_ORIGIN?.trim() || "http://localhost:3000";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -23,14 +27,15 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5174,
+    host: devHost,
+    port: Number.isFinite(devPort) ? devPort : 5174,
     proxy: {
       "/api": {
-        target: "http://localhost:3000",
+        target: backendOrigin,
         changeOrigin: true,
       },
       "/ws": {
-        target: "http://localhost:3000",
+        target: backendOrigin,
         ws: true,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ws/, "/ws"),

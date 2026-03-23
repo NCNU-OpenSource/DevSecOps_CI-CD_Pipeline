@@ -3,6 +3,7 @@ import type {
   ConnectionStatus,
   PlaybackState,
   PlaybackProgress,
+  SearchResult,
   Track,
   LyricLine,
 } from "@/types";
@@ -30,8 +31,8 @@ interface PlayerStore {
   setLyrics: (lyrics: LyricLine[]) => void;
 
   // 搜尋結果
-  searchResults: Track[];
-  setSearchResults: (results: Track[]) => void;
+  searchResults: SearchResult[];
+  setSearchResults: (results: SearchResult[]) => void;
   clearSearchResults: () => void;
 
   // 手機版搜尋狀態

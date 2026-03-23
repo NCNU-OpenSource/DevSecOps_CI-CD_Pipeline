@@ -13,6 +13,15 @@ type QueueChangeCallback = (queue: Track[]) => void;
 type PlaybackStateCallback = (state: PlaybackState) => void;
 type PlaybackProgressCallback = (progress: PlaybackProgress) => void;
 type LyricsChangeCallback = (lyrics: any[]) => void;
+type TrackLoadingCallback = (payload: {
+  track: Track | null;
+  message?: string;
+}) => void;
+type TrackReadyCallback = (track: Track) => void;
+type PlayErrorCallback = (payload: {
+  error: string;
+  track: Track | null;
+}) => void;
 
 const PROGRESS_BROADCAST_INTERVAL_MS = 250;
 
@@ -34,6 +43,9 @@ class QueueService {
   private stateChangeCallbacks: PlaybackStateCallback[] = [];
   private progressChangeCallbacks: PlaybackProgressCallback[] = [];
   private lyricsChangeCallbacks: LyricsChangeCallback[] = [];
+  private trackLoadingCallbacks: TrackLoadingCallback[] = [];
+  private trackReadyCallbacks: TrackReadyCallback[] = [];
+  private playErrorCallbacks: PlayErrorCallback[] = [];
   private pendingProgressTimeout: ReturnType<typeof setTimeout> | null = null;
   private lastProgressBroadcastAt = 0;
   private lastProgressPayload: PlaybackProgress | null = null;
@@ -131,6 +143,18 @@ class QueueService {
     this.lyricsChangeCallbacks.push(callback);
   }
 
+  onTrackLoading(callback: TrackLoadingCallback): void {
+    this.trackLoadingCallbacks.push(callback);
+  }
+
+  onTrackReady(callback: TrackReadyCallback): void {
+    this.trackReadyCallbacks.push(callback);
+  }
+
+  onPlayError(callback: PlayErrorCallback): void {
+    this.playErrorCallbacks.push(callback);
+  }
+
   /**
    * 廣播佇列變更
    */
@@ -207,6 +231,24 @@ class QueueService {
     );
   }
 
+  private broadcastPlayError(error: string, track: Track | null): void {
+    for (const callback of this.playErrorCallbacks) {
+      callback({ error, track });
+    }
+  }
+
+  private broadcastTrackLoading(track: Track | null, message?: string): void {
+    for (const callback of this.trackLoadingCallbacks) {
+      callback({ track, message });
+    }
+  }
+
+  private broadcastTrackReady(track: Track): void {
+    for (const callback of this.trackReadyCallbacks) {
+      callback(track);
+    }
+  }
+
   /**
    * 加入歌曲到播放清單
    */
@@ -240,7 +282,7 @@ class QueueService {
 
     if (shouldAutoPlay) {
       log.info("Auto-starting playback for newly added track");
-      this.playNext();
+      await this.playNext();
       return;
     }
 
@@ -380,6 +422,10 @@ class QueueService {
     });
 
     if (this.queue.length === 0) {
+      if (this.radioEnabled) {
+        this.broadcastTrackLoading(null, "正在準備下一首...");
+      }
+
       const filled = await this.ensureRadioTracks({
         immediatePlayback: true,
         seedTrack: this.currentTrack ?? this.lastPlayedTrack,
@@ -403,11 +449,17 @@ class QueueService {
       return;
     }
 
-    // 從佇列取出下一首
-    if (this.currentTrack) {
-      this.lastPlayedTrack = this.currentTrack;
-      this.rememberRecentlyPlayed(this.currentTrack.videoId);
+    const outgoingTrack = this.currentTrack;
+
+    // 手動切歌時要先停止舊播放器，再切換 currentTrack，
+    // 否則舊歌在串流解析期間送出的 time-pos 會被誤標成新歌進度。
+    if (outgoingTrack) {
+      this.lastPlayedTrack = outgoingTrack;
+      this.rememberRecentlyPlayed(outgoingTrack.videoId);
+      getPlayerService().stop();
     }
+
+    // 從佇列取出下一首
     const nextTrack = this.queue.shift()!;
     this.currentTrack = nextTrack;
     this.currentPosition = 0;
@@ -419,6 +471,7 @@ class QueueService {
     // 廣播變更
     this.broadcastQueueChange();
     this.broadcastState();
+    this.broadcastTrackLoading(nextTrack);
     this.maybeHydrateRadioQueue();
 
     // 獲取並廣播歌詞
@@ -438,6 +491,7 @@ class QueueService {
       log.info("Playback started successfully via direct stream URL", {
         source: streamResult.source,
       });
+      this.broadcastTrackReady(nextTrack);
     } catch (playError) {
       // Fallback：若直連串流失敗，再退回 mpv 直接處理 YouTube URL。
       log.warn("Direct stream playback failed, falling back to YouTube URL", {
@@ -450,7 +504,10 @@ class QueueService {
       try {
         await getPlayerService().play(nextTrack.videoId);
         log.info("Fallback playback started successfully via YouTube URL");
+        this.broadcastTrackReady(nextTrack);
       } catch (fallbackError) {
+        const errorMessage = `Failed to play track: ${nextTrack.title}. Error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`;
+
         log.error("Both direct stream playback and YouTube URL fallback failed", {
           playError:
             playError instanceof Error ? playError.message : String(playError),
@@ -462,15 +519,18 @@ class QueueService {
           trackTitle: nextTrack.title,
         });
 
-        // 重置狀態，通知前端
+        // 恢復佇列並重置狀態，避免歌曲因自動播放失敗而直接消失。
+        this.queue.unshift(nextTrack);
         this.currentTrack = null;
+        this.currentPosition = 0;
+        this.currentDuration = 0;
         this.isPaused = false;
+        this.broadcastQueueChange();
         this.broadcastState();
+        this.broadcastPlayError(errorMessage, nextTrack);
 
         // 拋出錯誤，讓調用者知道播放失敗
-        throw new Error(
-          `Failed to play track: ${nextTrack.title}. Error: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
-        );
+        throw new Error(errorMessage);
       }
     }
   }
@@ -785,6 +845,9 @@ class QueueService {
     this.stateChangeCallbacks = [];
     this.progressChangeCallbacks = [];
     this.lyricsChangeCallbacks = [];
+    this.trackLoadingCallbacks = [];
+    this.trackReadyCallbacks = [];
+    this.playErrorCallbacks = [];
     this.lastProgressBroadcastAt = 0;
     this.lastProgressPayload = null;
 

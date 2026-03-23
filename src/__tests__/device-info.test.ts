@@ -21,7 +21,7 @@ describe("device-info detection", () => {
           uaFullVersion: "137.0.0.0",
         }),
       },
-    } as Navigator);
+    } as unknown as Navigator);
 
     expect(device.kind).toBe("desktop");
     expect(device.reportedName).toBe("Desktop · macOS");
@@ -40,7 +40,7 @@ describe("device-info detection", () => {
       userAgent:
         "Mozilla/5.0 (X11; Linux x86_64; rv:138.0) Gecko/20100101 Firefox/138.0",
       platform: "Linux x86_64",
-    } as Navigator);
+    } as unknown as Navigator);
 
     expect(device.kind).toBe("desktop");
     expect(device.reportedName).toBe("Desktop · Linux");
@@ -59,7 +59,7 @@ describe("device-info detection", () => {
       userAgent:
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
       platform: "iPhone",
-    } as Navigator);
+    } as unknown as Navigator);
 
     expect(device.kind).toBe("mobile");
     expect(device.reportedName).toBe("Mobile · iOS");
@@ -72,13 +72,13 @@ describe("device-info detection", () => {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
       platform: "Win32",
       viewportWidth: 480,
-    } as Navigator & { viewportWidth: number });
+    } as unknown as Navigator & { viewportWidth: number });
     const wideViewportDevice = detectDeviceInfoSync({
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
       platform: "Win32",
       viewportWidth: 1440,
-    } as Navigator & { viewportWidth: number });
+    } as unknown as Navigator & { viewportWidth: number });
 
     expect(narrowViewportDevice.kind).toBe("desktop");
     expect(wideViewportDevice.kind).toBe("desktop");

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AnimatedAvatar } from "@/components/ui/animated-avatar";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { usePlayerStore } from "@/stores/playerStore";
 import { useAppUiStore } from "@/stores/appUiStore";
 import { api } from "@/services/api";
@@ -13,6 +14,10 @@ export const MiniPlayer = () => {
   const isPlaying = usePlayerStore((state) => state.playbackState.isPlaying);
   const position = usePlayerStore((state) => state.playbackState.position);
   const duration = usePlayerStore((state) => state.playbackState.duration);
+  const nextTrack = usePlayerStore((state) => state.playbackState.queue[0] ?? null);
+  const radioEnabled = usePlayerStore((state) => state.playbackState.radioEnabled);
+  const isLoadingTrack = usePlayerStore((state) => state.isLoadingTrack);
+  const setLoadingTrack = usePlayerStore((state) => state.setLoadingTrack);
   const setMobileNowPlayingOpen = useAppUiStore(
     (state) => state.setMobileNowPlayingOpen,
   );
@@ -39,10 +44,27 @@ export const MiniPlayer = () => {
 
   const handleSkip = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!currentTrack || isLoadingTrack) {
+      return;
+    }
+
+    const shouldShowLoading = radioEnabled || nextTrack !== null;
+    if (shouldShowLoading) {
+      setLoadingTrack(
+        true,
+        nextTrack
+          ? `正在載入「${nextTrack.title}」...`
+          : "正在準備下一首...",
+      );
+    }
+
     setIsLoading(true);
     try {
       await api.skip();
     } catch (error) {
+      if (shouldShowLoading) {
+        setLoadingTrack(false);
+      }
       console.error("跳過失敗:", error);
     } finally {
       setIsLoading(false);
@@ -50,7 +72,8 @@ export const MiniPlayer = () => {
   };
 
   // 計算進度百分比
-  const progress = duration > 0 ? (position / duration) * 100 : 0;
+  const progress =
+    !isLoadingTrack && duration > 0 ? (position / duration) * 100 : 0;
 
   return (
     <div
@@ -66,10 +89,18 @@ export const MiniPlayer = () => {
         }}
       >
         <div className="h-1 bg-[var(--surface-border)]">
-          <div
-            className="h-full bg-[var(--accent)] transition-all duration-300"
-            style={{ width: `${progress}%` }}
-          />
+          {isLoadingTrack ? (
+            <div
+              key="loading-bar"
+              className="h-full w-full animate-pulse bg-[var(--accent)]/60"
+            />
+          ) : (
+            <div
+              key="progress-bar"
+              className="h-full bg-[var(--accent)] transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          )}
         </div>
 
         <div className="relative flex items-center gap-3 p-3">
@@ -112,11 +143,13 @@ export const MiniPlayer = () => {
                   variant="ghost"
                   size="sm"
                   onClick={handlePlayPause}
-                  disabled={isLoading}
+                  disabled={isLoading || isLoadingTrack}
                   title={isPlaying ? "暫停" : "播放"}
                   className="h-9 w-9 rounded-full px-0"
                 >
-                  {isPlaying ? (
+                  {isLoading || isLoadingTrack ? (
+                    <Spinner size="sm" />
+                  ) : isPlaying ? (
                     <svg
                       className="h-5 w-5"
                       fill="currentColor"
@@ -139,7 +172,7 @@ export const MiniPlayer = () => {
                   variant="ghost"
                   size="sm"
                   onClick={handleSkip}
-                  disabled={isLoading}
+                  disabled={isLoading || isLoadingTrack}
                   title="下一首"
                   className="h-9 w-9 rounded-full px-0"
                 >

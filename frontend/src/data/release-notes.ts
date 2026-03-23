@@ -5,6 +5,18 @@ export interface ReleaseNotesEntry {
 }
 
 const releaseNotesByVersion: Record<string, ReleaseNotesEntry> = {
+  "0.5.0": {
+    version: "0.5.0",
+    title: "搜尋與播放切換修正",
+    highlights: [
+      "搜尋結果現在可正確加入播放佇列，並在空佇列時自動開始播放。",
+      "支援從 YouTube / YouTube Music 連結解析單曲、歌單、專輯與 Mix 內容。",
+      "Mix 列表中的單首歌曲或影片可各自加入播放佇列、歌單與收藏。",
+      "Mix 內容的作者名稱顯示已修正，不再誤顯示為 Unknown。",
+      "WebSocket 連線穩定性已改善，降低前端重複掛載造成的斷線問題。",
+      "播放器在手動跳歌與自動切歌時會顯示正確的載入狀態，且不再沿用上一首的進度條位置。",
+    ],
+  },
   "0.4.0": {
     version: "0.4.0",
     title: "播放體驗更新",
