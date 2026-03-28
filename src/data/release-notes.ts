@@ -1,6 +1,46 @@
 import type { ReleaseNotesEntry } from "../types/index.ts";
 
 const fallbackReleaseNotesByVersion: Record<string, ReleaseNotesEntry> = {
+  "0.7.5": {
+    version: "0.7.5",
+    title: "Discover 體驗定稿與播放增強",
+    publishedAt: "2026-03-28",
+    status: "preview",
+    summary:
+      "把 Discover 補成更完整的探索入口，加入音樂影片焦點展示、榜單化熱門點播與更穩定的播放體驗。",
+    sections: [
+      {
+        category: "added",
+        title: "全新功能",
+        description: "補上這一輪真正新增的探索與播放能力。",
+        items: [
+          "新增音樂影片焦點區塊，會把影片型 Discover section 改成大尺寸 hero 版型，方便先看視覺氛圍再決定是否播放。",
+          "播放器新增音量平衡開關，會依 YouTube loudness metadata 自動調整增益，讓不同歌曲的實際聽感音量更一致。",
+          "版本說明頁可直接整合 GitHub Releases，若目前版本尚未發布，會自動回退到本機版本資料。",
+        ],
+      },
+      {
+        category: "changed",
+        title: "Discover 體驗增強",
+        description: "把原本偏展示的卡片整理成更接近真實產品節奏的探索介面。",
+        items: [
+          "本站熱門點播改為榜單式版型，加入冠軍焦點卡與後續名次列表，更容易快速理解站內熱門內容。",
+          "Discover 卡片支援更完整的專輯、播放清單與歌手導覽，專輯與播放清單卡片也會預先露出曲目 preview。",
+          "桌面側欄 idle state 會依目前所在區域切換文案，Discover 模式下會直接提示從市場探索、熱門點播或新專輯開始播放。",
+        ],
+      },
+      {
+        category: "fixed",
+        title: "問題修復",
+        description: "修正 Discover 與播放流程中幾個會直接影響可用性的細節。",
+        items: [
+          "修正 Discover 專輯、播放清單與音樂影片項目的部分藝人名稱顯示為 Unknown、時長為 0 或封面不一致的解析問題。",
+          "改善 Discover 橫向卡片的尺寸、對齊、陰影裁切與操作區布局，避免不同內容類型混排時出現高低不齊或按鈕擠壓。",
+          "熱門點播、音樂影片與其他探索卡片的互動層級重新整理後，加入佇列、建立 Mix 與收藏的操作會更穩定且更容易理解。",
+        ],
+      },
+    ],
+  },
   "0.7.0": {
     version: "0.7.0",
     title: "Discover 多市場探索",
