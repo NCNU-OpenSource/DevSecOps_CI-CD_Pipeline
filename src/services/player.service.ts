@@ -30,6 +30,7 @@ type PlayerSession = {
   source: SessionSource;
   volumeMultiplier: number;
   targetVolume: number;
+  duration: number | null;
   process: ChildProcess;
   ipcSocket: Socket | null;
   ipcPath: string;
@@ -42,6 +43,7 @@ type PlayerSession = {
 
 const CROSSFADE_TICK_MS = 100;
 const RETIRING_STOP_GRACE_MS = 180;
+const SESSION_VOLUME_RETRY_DELAY_MS = 120;
 const MAX_USER_VOLUME = 100;
 const MAX_SESSION_VOLUME = 200;
 
@@ -59,6 +61,7 @@ class PlayerService {
   private eventCallback: PlayerEventCallback | null = null;
   private playSessionId = 0;
   private crossfadeTimer: ReturnType<typeof setInterval> | null = null;
+  private crossfadeFinalizeTimeout: ReturnType<typeof setTimeout> | null = null;
   private retiringStopTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 
   private constructor() {
@@ -220,6 +223,13 @@ class PlayerService {
     }
   }
 
+  private clearCrossfadeFinalizeTimeout(): void {
+    if (this.crossfadeFinalizeTimeout) {
+      clearTimeout(this.crossfadeFinalizeTimeout);
+      this.crossfadeFinalizeTimeout = null;
+    }
+  }
+
   private clearRetiringStopTimeout(sessionId: number): void {
     const timeout = this.retiringStopTimeouts.get(sessionId);
     if (!timeout) {
@@ -310,25 +320,96 @@ class PlayerService {
     return true;
   }
 
-  private sendIpcCommand(session: PlayerSession, command: unknown[]): void {
+  private sendIpcCommand(session: PlayerSession, command: unknown[]): boolean {
     if (!session.ipcSocket || session.ipcSocket.destroyed) {
       log.debug("Cannot send IPC command: socket not connected", {
         sessionId: session.id,
         purpose: session.purpose,
       });
-      return;
+      return false;
     }
 
     session.ipcSocket.write(`${JSON.stringify({ command })}\n`);
+    return true;
   }
 
-  private setSessionPaused(session: PlayerSession, paused: boolean): void {
-    this.sendIpcCommand(session, ["set_property", "pause", paused]);
+  private setSessionPaused(session: PlayerSession, paused: boolean): boolean {
+    return this.sendIpcCommand(session, ["set_property", "pause", paused]);
   }
 
-  private setSessionVolume(session: PlayerSession, volume: number): void {
+  private setSessionVolume(session: PlayerSession, volume: number): boolean {
     const nextVolume = this.clampSessionVolume(volume);
-    this.sendIpcCommand(session, ["set_property", "volume", nextVolume]);
+    return this.sendIpcCommand(session, ["set_property", "volume", nextVolume]);
+  }
+
+  private ensureSessionTargetVolume(
+    session: PlayerSession,
+    options: {
+      onlyWhenActive?: boolean;
+      onlyWhenNoCrossfade?: boolean;
+      retryDelayMs?: number;
+    } = {},
+  ): void {
+    const applyTargetVolume = () => {
+      if (!this.isTrackedSession(session)) {
+        return;
+      }
+
+      if (options.onlyWhenActive && this.activeSession !== session) {
+        return;
+      }
+
+      if (options.onlyWhenNoCrossfade && this.crossfadeTimer) {
+        return;
+      }
+
+      this.setSessionVolume(session, session.targetVolume);
+    };
+
+    applyTargetVolume();
+    setTimeout(
+      applyTargetVolume,
+      options.retryDelayMs ?? SESSION_VOLUME_RETRY_DELAY_MS,
+    );
+  }
+
+  private promoteStandbyToActive(
+    trackId: string,
+  ): { incoming: PlayerSession; outgoing: PlayerSession | null } | null {
+    const standby = this.standbySession;
+    if (!standby || !standby.ready || standby.trackId !== trackId) {
+      return null;
+    }
+
+    const outgoing = this.activeSession;
+    this.clearCrossfadeTimer();
+    this.clearCrossfadeFinalizeTimeout();
+    this.refreshSessionTargetVolume(standby);
+    this.standbySession = null;
+    this.activeSession = standby;
+    standby.purpose = "active";
+
+    return {
+      incoming: standby,
+      outgoing,
+    };
+  }
+
+  private finalizeCrossfadeVolumes(
+    outgoing: PlayerSession,
+    incoming: PlayerSession,
+  ): void {
+    if (this.activeSession !== incoming) {
+      return;
+    }
+
+    this.clearCrossfadeTimer();
+    this.clearCrossfadeFinalizeTimeout();
+    this.setSessionVolume(outgoing, 0);
+    this.ensureSessionTargetVolume(incoming, {
+      onlyWhenActive: true,
+      onlyWhenNoCrossfade: true,
+    });
   }
 
   private connectSessionIpc(session: PlayerSession): Promise<void> {
@@ -476,6 +557,15 @@ class PlayerService {
     session: PlayerSession,
     message: { name: string; data: number | boolean },
   ): void {
+    if (
+      message.name === "duration" &&
+      typeof message.data === "number" &&
+      Number.isFinite(message.data) &&
+      message.data >= 0
+    ) {
+      session.duration = message.data;
+    }
+
     if (message.name === "time-pos") {
       if (
         session.confirmation?.mode === "playback" &&
@@ -586,6 +676,7 @@ class PlayerService {
       source: options.source,
       volumeMultiplier: this.normalizeVolumeMultiplier(options.volumeMultiplier),
       targetVolume: 0,
+      duration: null,
       process: null as unknown as ChildProcess,
       ipcSocket: null,
       ipcPath: this.getIpcPath(sessionId),
@@ -606,7 +697,7 @@ class PlayerService {
       session.volumeMultiplier,
     );
     const mpvArgs = this.buildMpvArgs(session, {
-      volume: startPaused ? 0 : session.targetVolume,
+      volume: session.targetVolume,
       startPaused,
     });
     const mpvCommand = getMpvExecutable();
@@ -852,6 +943,7 @@ class PlayerService {
 
   private stopAllSessions(): void {
     this.clearCrossfadeTimer();
+    this.clearCrossfadeFinalizeTimeout();
     this.clearAllRetiringStopTimeouts();
     this.stopSpecificSession(this.activeSession);
     this.stopSpecificSession(this.standbySession);
@@ -880,12 +972,16 @@ class PlayerService {
     }
 
     this.clearCrossfadeTimer();
+    this.clearCrossfadeFinalizeTimeout();
     for (const session of [...this.retiringSessions]) {
       this.stopSpecificSession(session);
     }
 
     if (this.activeSession) {
-      this.setSessionVolume(this.activeSession, this.activeSession.targetVolume);
+      this.ensureSessionTargetVolume(this.activeSession, {
+        onlyWhenActive: true,
+        onlyWhenNoCrossfade: true,
+      });
     }
   }
 
@@ -926,6 +1022,13 @@ class PlayerService {
         }
         this.isPlaying = false;
         throw new Error("Playback session was cancelled before start");
+      }
+
+      if (this.activeSession === session) {
+        this.ensureSessionTargetVolume(session, {
+          onlyWhenActive: true,
+          onlyWhenNoCrossfade: true,
+        });
       }
     } catch (error) {
       if (this.activeSession === session) {
@@ -989,6 +1092,7 @@ class PlayerService {
         options.volumeMultiplier,
       );
       this.refreshSessionTargetVolume(this.standbySession);
+      this.ensureSessionTargetVolume(this.standbySession);
       return true;
     }
 
@@ -1001,7 +1105,6 @@ class PlayerService {
       purpose: "standby",
       confirmMode: "preload",
       startPaused: true,
-      volume: 0,
       volumeMultiplier: options.volumeMultiplier,
       trackId,
     });
@@ -1010,6 +1113,14 @@ class PlayerService {
 
     try {
       const isReady = await ready;
+      if (
+        isReady &&
+        this.standbySession === session &&
+        session.ready &&
+        session.trackId === trackId
+      ) {
+        this.ensureSessionTargetVolume(session);
+      }
       return Boolean(
         isReady &&
           this.standbySession === session &&
@@ -1049,19 +1160,17 @@ class PlayerService {
   }
 
   async playPreloaded(trackId: string): Promise<boolean> {
-    const standby = this.standbySession;
-    if (!standby || !standby.ready || standby.trackId !== trackId) {
+    const promoted = this.promoteStandbyToActive(trackId);
+    if (!promoted) {
       return false;
     }
 
-    const outgoing = this.activeSession;
-    this.standbySession = null;
-    this.activeSession = standby;
-    standby.purpose = "active";
-    this.clearCrossfadeTimer();
-
-    this.setSessionVolume(standby, standby.targetVolume);
-    this.setSessionPaused(standby, false);
+    const { incoming, outgoing } = promoted;
+    this.setSessionPaused(incoming, false);
+    this.ensureSessionTargetVolume(incoming, {
+      onlyWhenActive: true,
+      onlyWhenNoCrossfade: true,
+    });
 
     if (outgoing) {
       this.stopSpecificSession(outgoing);
@@ -1075,22 +1184,16 @@ class PlayerService {
     trackId: string,
     durationMs: number,
   ): Promise<boolean> {
-    const outgoing = this.activeSession;
-    const incoming = this.standbySession;
-
-    if (
-      !outgoing ||
-      !incoming ||
-      !incoming.ready ||
-      incoming.trackId !== trackId
-    ) {
+    if (!this.activeSession) {
       return false;
     }
 
-    this.clearCrossfadeTimer();
-    this.standbySession = null;
-    this.activeSession = incoming;
-    incoming.purpose = "active";
+    const promoted = this.promoteStandbyToActive(trackId);
+    if (!promoted?.outgoing) {
+      return false;
+    }
+
+    const { incoming, outgoing } = promoted;
     outgoing.purpose = "retiring";
     this.retiringSessions.add(outgoing);
 
@@ -1110,14 +1213,16 @@ class PlayerService {
       this.setSessionVolume(incoming, incoming.targetVolume * fadeInFactor);
 
       if (progress >= 1) {
-        this.clearCrossfadeTimer();
-        this.setSessionVolume(outgoing, 0);
-        this.setSessionVolume(incoming, incoming.targetVolume);
+        this.finalizeCrossfadeVolumes(outgoing, incoming);
       }
     };
 
     applyVolumes();
     this.crossfadeTimer = setInterval(applyVolumes, CROSSFADE_TICK_MS);
+    this.clearCrossfadeFinalizeTimeout();
+    this.crossfadeFinalizeTimeout = setTimeout(() => {
+      this.finalizeCrossfadeVolumes(outgoing, incoming);
+    }, totalDuration + CROSSFADE_TICK_MS);
     this.scheduleRetiringStop(outgoing, totalDuration);
     this.isPlaying = true;
 
@@ -1178,7 +1283,14 @@ class PlayerService {
     }
 
     if (this.activeSession && !this.crossfadeTimer) {
-      this.setSessionVolume(this.activeSession, this.activeSession.targetVolume);
+      this.ensureSessionTargetVolume(this.activeSession, {
+        onlyWhenActive: true,
+        onlyWhenNoCrossfade: true,
+      });
+    }
+
+    if (this.standbySession) {
+      this.ensureSessionTargetVolume(this.standbySession);
     }
   }
 
@@ -1190,6 +1302,7 @@ class PlayerService {
 
     const nextMultiplier = this.normalizeVolumeMultiplier(volumeMultiplier);
     let updatedActive = false;
+    let updatedStandby = false;
 
     const updateSession = (session: PlayerSession | null): boolean => {
       if (!session || session.trackId !== normalizedTrackId) {
@@ -1202,14 +1315,21 @@ class PlayerService {
     };
 
     updatedActive = updateSession(this.activeSession);
-    updateSession(this.standbySession);
+    updatedStandby = updateSession(this.standbySession);
 
     for (const session of this.retiringSessions) {
       updateSession(session);
     }
 
     if (updatedActive && this.activeSession && !this.crossfadeTimer) {
-      this.setSessionVolume(this.activeSession, this.activeSession.targetVolume);
+      this.ensureSessionTargetVolume(this.activeSession, {
+        onlyWhenActive: true,
+        onlyWhenNoCrossfade: true,
+      });
+    }
+
+    if (updatedStandby && this.standbySession) {
+      this.ensureSessionTargetVolume(this.standbySession);
     }
   }
 
@@ -1233,6 +1353,10 @@ class PlayerService {
     return this.currentVolume;
   }
 
+  getActiveDuration(): number | null {
+    return this.activeSession?.duration ?? null;
+  }
+
   isCurrentlyPlaying(): boolean {
     return this.isPlaying;
   }
@@ -1248,6 +1372,7 @@ class PlayerService {
     this.standbySession = null;
     this.retiringSessions.clear();
     this.clearCrossfadeTimer();
+    this.clearCrossfadeFinalizeTimeout();
     this.clearAllRetiringStopTimeouts();
   }
 }

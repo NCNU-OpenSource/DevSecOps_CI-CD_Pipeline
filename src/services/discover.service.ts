@@ -85,6 +85,11 @@ type TrackActivityRow = {
 };
 
 type JoinedTopRequestedRow = TrackCatalogRow & TrackActivityRow;
+type TrackCatalogMetadataUpdate = {
+  videoId: string;
+  artist?: string;
+  duration?: number;
+};
 
 const DISCOVER_MARKET_CONFIGS: readonly DiscoverMarketConfig[] = [
   { code: "TW", label: "台灣", lang: "zh-TW", location: "TW" },
@@ -129,6 +134,14 @@ function normalizeTrackForStats(track: Track): Track | null {
     thumbnail: track.thumbnail?.trim() || undefined,
     album: track.album,
   };
+}
+
+function normalizeStatsDuration(value: number | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return Math.round(value);
 }
 
 function normalizeDiscoverMarketCode(
@@ -977,10 +990,22 @@ class DiscoverStatsStore {
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
             ON CONFLICT(video_id) DO UPDATE SET
-              title = excluded.title,
-              artist = excluded.artist,
-              thumbnail = excluded.thumbnail,
-              duration = excluded.duration,
+              title = CASE
+                WHEN excluded.title IS NOT NULL AND excluded.title <> 'Unknown'
+                  THEN excluded.title
+                ELSE discover_track_catalog.title
+              END,
+              artist = CASE
+                WHEN excluded.artist IS NOT NULL AND excluded.artist <> 'Unknown'
+                  THEN excluded.artist
+                ELSE discover_track_catalog.artist
+              END,
+              thumbnail = COALESCE(excluded.thumbnail, discover_track_catalog.thumbnail),
+              duration = CASE
+                WHEN excluded.duration IS NOT NULL AND excluded.duration > 0
+                  THEN excluded.duration
+                ELSE discover_track_catalog.duration
+              END,
               updated_at = excluded.updated_at
           `)
           .run(
@@ -1007,6 +1032,39 @@ class DiscoverStatsStore {
     });
 
     transaction(normalizedTracks);
+  }
+
+  updateTrackCatalogMetadata(update: TrackCatalogMetadataUpdate): void {
+    const videoId = update.videoId.trim();
+    if (!videoId) {
+      return;
+    }
+
+    const artist = hasMeaningfulArtistName(update.artist)
+      ? update.artist!.trim()
+      : null;
+    const duration = normalizeStatsDuration(update.duration);
+
+    if (!artist && duration === null) {
+      return;
+    }
+
+    this.db
+      .query(`
+        UPDATE discover_track_catalog
+        SET
+          artist = CASE
+            WHEN ?2 IS NOT NULL THEN ?2
+            ELSE artist
+          END,
+          duration = CASE
+            WHEN ?3 IS NOT NULL THEN ?3
+            ELSE duration
+          END,
+          updated_at = ?4
+        WHERE video_id = ?1
+      `)
+      .run(videoId, artist, duration, new Date().toISOString());
   }
 
   getTopRequested(limit: number = DEFAULT_TOP_REQUESTED_LIMIT): TopRequestedEntry[] {
@@ -1087,11 +1145,15 @@ export class DiscoverService {
     DiscoverService.instance = undefined;
   }
 
-  getMarketsResponse(): DiscoverMarketsResponse {
+  async getMarketsResponse(): Promise<DiscoverMarketsResponse> {
+    const topRequested = await this.enrichTopRequestedMetadata(
+      this.statsStore.getTopRequested(),
+    );
+
     return {
       markets: DISCOVER_MARKETS.map((market) => ({ ...market })),
       defaultMarket: DEFAULT_DISCOVER_MARKET,
-      topRequested: this.statsStore.getTopRequested(),
+      topRequested,
     };
   }
 
@@ -1101,6 +1163,74 @@ export class DiscoverService {
 
   recordTrackRequests(tracks: Track[]): void {
     this.statsStore.recordTrackRequests(tracks);
+  }
+
+  private async enrichTopRequestedMetadata(
+    entries: TopRequestedEntry[],
+  ): Promise<TopRequestedEntry[]> {
+    const pendingEntries = entries.filter(
+      (entry) =>
+        entry.track.duration <= 0 ||
+        !hasMeaningfulArtistName(entry.track.artist),
+    );
+
+    if (pendingEntries.length === 0) {
+      return entries;
+    }
+
+    const metadataByVideoId = new Map<string, DiscoverVideoMetadata>();
+    const metadataResults = await Promise.all(
+      pendingEntries.map(async (entry) => ({
+        videoId: entry.track.videoId,
+        metadata: await this.getDiscoverVideoMetadata(
+          DEFAULT_DISCOVER_MARKET,
+          entry.track.videoId,
+        ),
+      })),
+    );
+
+    for (const result of metadataResults) {
+      if (result.metadata) {
+        metadataByVideoId.set(result.videoId, result.metadata);
+      }
+    }
+
+    return entries.map((entry) => {
+      const metadata = metadataByVideoId.get(entry.track.videoId);
+      if (!metadata) {
+        return entry;
+      }
+
+      const resolvedDuration =
+        entry.track.duration > 0
+          ? entry.track.duration
+          : metadata.duration || 0;
+      const resolvedArtist = hasMeaningfulArtistName(entry.track.artist)
+        ? entry.track.artist
+        : metadata.artist || entry.track.artist;
+
+      if (
+        resolvedDuration === entry.track.duration &&
+        resolvedArtist === entry.track.artist
+      ) {
+        return entry;
+      }
+
+      this.statsStore.updateTrackCatalogMetadata({
+        videoId: entry.track.videoId,
+        duration: resolvedDuration,
+        artist: resolvedArtist,
+      });
+
+      return {
+        ...entry,
+        track: {
+          ...entry.track,
+          duration: resolvedDuration,
+          artist: resolvedArtist,
+        },
+      };
+    });
   }
 
   async getFeed(

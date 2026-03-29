@@ -75,6 +75,22 @@ function expectMixTrack(track: Track, expectedTrack: Track): void {
   });
 }
 
+function suppressNextTrackPreload(
+  queueService: ReturnType<typeof getQueueService>,
+): void {
+  const queue = queueService as unknown as {
+    syncNextTrackPreload: (options?: { force?: boolean }) => Promise<boolean>;
+  };
+
+  stubMethod(queue, "syncNextTrackPreload", async () => false);
+}
+
+function stubTrackLoudness(
+  musicService: ReturnType<typeof getMusicService>,
+): void {
+  stubMethod(musicService, "getTrackLoudness", async () => null);
+}
+
 describe("QueueService mix creation", () => {
   beforeEach(() => {
     restoreMethods();
@@ -98,6 +114,9 @@ describe("QueueService mix creation", () => {
     let playUrlCalls = 0;
     let getMixTracksCalls = 0;
     let getStreamUrlCalls = 0;
+
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
 
     stubMethod(playerService, "stop", async () => {
       stopCalls++;
@@ -156,6 +175,9 @@ describe("QueueService mix creation", () => {
       notifyMixFetchStarted = resolve;
     });
 
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
+
     stubMethod(playerService, "stop", async () => {});
     stubMethod(playerService, "play", async () => {
       throw new Error("play() should not be used when playUrl() succeeds");
@@ -201,6 +223,9 @@ describe("QueueService mix creation", () => {
     const playerService = getPlayerService();
     const musicService = getMusicService();
 
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
+
     stubMethod(playerService, "stop", async () => {});
     stubMethod(playerService, "isCurrentlyPlaying", () => false);
     stubMethod(playerService, "play", async () => {
@@ -242,6 +267,9 @@ describe("QueueService mix creation", () => {
     const musicService = getMusicService();
     let playUrlCalls = 0;
 
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
+
     stubMethod(playerService, "stop", async () => {});
     stubMethod(playerService, "play", async () => {
       throw new Error("play() should not be used when playUrl() succeeds");
@@ -266,30 +294,43 @@ describe("QueueService mix creation", () => {
     expect(state.queue).toEqual([]);
   });
 
-  test("should ignore a delayed exit from the intentionally stopped previous player", async () => {
+  test("should detach the previous session before starting mix playback", async () => {
     const queueService = getQueueService();
     const playerService = getPlayerService();
     const musicService = getMusicService();
+    let killCalls = 0;
     const oldProcess = {
-      kill: () => true,
+      kill: () => {
+        killCalls++;
+        return true;
+      },
     } as unknown as ChildProcess;
+    const oldSession = {
+      id: 1,
+      purpose: "active" as const,
+      source: { type: "stream" as const, value: "https://stream/old-track" },
+      volumeMultiplier: 1,
+      targetVolume: 70,
+      process: oldProcess,
+      ipcSocket: null,
+      ipcPath: "/tmp/test-mpv.sock",
+      ipcConnectRetries: 0,
+      eofHandled: false,
+      ready: true,
+      trackId: "old-track",
+      confirmation: null,
+    };
     const player = playerService as unknown as {
-      mpvProcess: ChildProcess | null;
+      activeSession: typeof oldSession | null;
       isPlaying: boolean;
-      eofHandled: boolean;
-      handleSpawnedProcessExit: (
-        process: ChildProcess,
-        code: number | null,
-        signal: NodeJS.Signals | null,
-        handleSuccess: () => void,
-        handleError: (error: Error) => void,
-      ) => void;
     };
     let playUrlCalls = 0;
 
-    player.mpvProcess = oldProcess;
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
+
+    player.activeSession = oldSession;
     player.isPlaying = true;
-    player.eofHandled = false;
 
     stubMethod(playerService, "play", async () => {
       throw new Error("play() should not be used when playUrl() succeeds");
@@ -306,9 +347,8 @@ describe("QueueService mix creation", () => {
 
     const tracks = await queueService.createMixFromTrack(baseTrack);
 
-    player.handleSpawnedProcessExit(oldProcess, 0, null, () => {}, () => {});
-    await Promise.resolve();
-
+    expect(killCalls).toBe(1);
+    expect(player.activeSession).toBeNull();
     expect(playUrlCalls).toBe(1);
     expect(tracks).toEqual([baseTrack, ...mixTracks]);
     expectMixTrack(queueService.getState().currentTrack!, baseTrack);
@@ -322,6 +362,9 @@ describe("QueueService mix creation", () => {
     const playerService = getPlayerService();
     const musicService = getMusicService();
     let playCalls = 0;
+
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
 
     stubMethod(playerService, "stop", async () => {});
     stubMethod(playerService, "play", async (videoId: string) => {
@@ -348,6 +391,9 @@ describe("QueueService mix creation", () => {
     const queueService = getQueueService();
     const playerService = getPlayerService();
     const musicService = getMusicService();
+
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
 
     stubMethod(playerService, "stop", async () => {});
     stubMethod(playerService, "play", async () => {

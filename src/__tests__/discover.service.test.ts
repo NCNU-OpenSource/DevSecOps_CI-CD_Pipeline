@@ -104,14 +104,14 @@ describe("DiscoverService", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  test("returns configured markets and top requested tracks", () => {
+  test("returns configured markets and top requested tracks", async () => {
     service.recordTrackRequests([
       createTrack("track-1", "Track One"),
       createTrack("track-2", "Track Two"),
       createTrack("track-1", "Track One"),
     ]);
 
-    const response = service.getMarketsResponse();
+    const response = await service.getMarketsResponse();
 
     expect(response.defaultMarket).toBe(DEFAULT_DISCOVER_MARKET);
     expect(response.markets).toEqual(DISCOVER_MARKETS);
@@ -125,6 +125,70 @@ describe("DiscoverService", () => {
         title: "Track One",
       },
     });
+  });
+
+  test("preserves an existing catalog duration when a later request reports 0", async () => {
+    service.recordTrackRequests([
+      createTrack("track-1", "Track One"),
+    ]);
+    service.recordTrackRequests([
+      {
+        ...createTrack("track-1", "Track One"),
+        duration: 0,
+      },
+    ]);
+
+    const response = await service.getMarketsResponse();
+
+    expect(response.topRequested[0]?.track.duration).toBe(180);
+  });
+
+  test("hydrates missing durations for top requested tracks and persists the backfill", async () => {
+    service.recordTrackRequests([
+      {
+        ...createTrack("track-1", "Track One"),
+        duration: 0,
+      },
+    ]);
+
+    let metadataCalls = 0;
+    (
+      service as unknown as {
+        getDiscoverVideoMetadata: (
+          market: DiscoverMarketCode,
+          videoId: string,
+        ) => Promise<{ duration?: number; artist?: string } | null>;
+      }
+    ).getDiscoverVideoMetadata = async (market, videoId) => {
+      metadataCalls++;
+      expect(market).toBe(DEFAULT_DISCOVER_MARKET);
+      expect(videoId).toBe("track-1");
+      return {
+        duration: 215,
+      };
+    };
+
+    const firstResponse = await service.getMarketsResponse();
+
+    expect(firstResponse.topRequested[0]?.track.duration).toBe(215);
+    expect(metadataCalls).toBe(1);
+
+    (
+      service as unknown as {
+        getDiscoverVideoMetadata: (
+          market: DiscoverMarketCode,
+          videoId: string,
+        ) => Promise<{ duration?: number; artist?: string } | null>;
+      }
+    ).getDiscoverVideoMetadata = async () => {
+      metadataCalls++;
+      return null;
+    };
+
+    const secondResponse = await service.getMarketsResponse();
+
+    expect(secondResponse.topRequested[0]?.track.duration).toBe(215);
+    expect(metadataCalls).toBe(1);
   });
 
   test("normalizes invalid market input back to TW", async () => {

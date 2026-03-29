@@ -901,12 +901,12 @@ api.get("/system/release-notes", async (c) => {
  * GET /api/discover/markets
  * 取得可用市場與本站熱門點播
  */
-api.get("/discover/markets", (c) => {
+api.get("/discover/markets", async (c) => {
   try {
     const discoverService = getDiscoverService();
     return c.json<ApiResponse>({
       success: true,
-      data: discoverService.getMarketsResponse(),
+      data: await discoverService.getMarketsResponse(),
     });
   } catch (error) {
     console.error("Failed to get discover markets:", error);

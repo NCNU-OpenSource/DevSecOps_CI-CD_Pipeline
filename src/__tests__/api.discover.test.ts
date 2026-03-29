@@ -100,7 +100,7 @@ describe("/api/discover", () => {
     stubMethod(
       discoverService,
       "getMarketsResponse",
-      (() => payload) as typeof discoverService.getMarketsResponse,
+      (async () => payload) as typeof discoverService.getMarketsResponse,
     );
 
     const response = await api.request("/discover/markets");
