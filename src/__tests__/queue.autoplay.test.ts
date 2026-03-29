@@ -41,6 +41,39 @@ function restoreMethods(): void {
   }
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 200,
+): Promise<void> {
+  const startedAt = Date.now();
+
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for autoplay to reach the expected state");
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
+
+function suppressNextTrackPreload(
+  queueService: ReturnType<typeof getQueueService>,
+): void {
+  const queue = queueService as unknown as {
+    syncNextTrackPreload: (options?: { force?: boolean }) => Promise<boolean>;
+  };
+
+  stubMethod(queue, "syncNextTrackPreload", async () => false);
+}
+
+function stubTrackLoudness(
+  musicService: ReturnType<typeof getMusicService>,
+): void {
+  stubMethod(musicService, "getTrackLoudness", async () => null);
+}
+
 const searchedTrack: Track = {
   videoId: "search-track",
   title: "Search Song",
@@ -80,6 +113,9 @@ describe("QueueService autoplay after adding a searched track", () => {
       trackReadyEvents.push(track);
     });
 
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
+
     stubMethod(playerService, "isCurrentlyPlaying", () => false);
     stubMethod(playerService, "stop", async () => {});
     stubMethod(playerService, "play", async () => {
@@ -106,8 +142,7 @@ describe("QueueService autoplay after adding a searched track", () => {
       addResolved = true;
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await waitForCondition(() => resolvePlaybackStart !== null);
 
     expect(addResolved).toBe(false);
     expect(queueService.getState().currentTrack?.videoId).toBe(
@@ -163,6 +198,9 @@ describe("QueueService autoplay after adding a searched track", () => {
     queueService.onPlayError((payload) => {
       playErrors.push(payload);
     });
+
+    suppressNextTrackPreload(queueService);
+    stubTrackLoudness(musicService);
 
     stubMethod(playerService, "isCurrentlyPlaying", () => false);
     stubMethod(playerService, "stop", async () => {});

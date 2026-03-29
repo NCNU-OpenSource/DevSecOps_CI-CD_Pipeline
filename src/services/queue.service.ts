@@ -695,12 +695,13 @@ class QueueService {
     const volumeNormalizationChanged =
       this.playbackSettings.volumeNormalizationEnabled !==
       nextSettings.volumeNormalizationEnabled;
+    const nextTrack = this.queue[0] ?? null;
     this.playbackSettings = nextSettings;
     this.broadcastState();
 
     if (volumeNormalizationChanged) {
       void this.syncTrackVolumeNormalization(this.currentTrack);
-      void this.syncTrackVolumeNormalization(this.queue[0] ?? null);
+      void this.syncTrackVolumeNormalization(nextTrack);
     }
 
     void this.syncNextTrackPreload({ force: true });
@@ -1480,19 +1481,25 @@ function arePlaybackSettingsEqual(
 function resolveNormalizationGainDb(
   loudnessInfo: TrackLoudnessInfo | null,
 ): number {
-  const loudnessDb = loudnessInfo?.loudnessDb;
   const perceptualLoudnessDb = loudnessInfo?.perceptualLoudnessDb;
-  let gainDb = 0;
-
-  if (typeof loudnessDb === "number" && Number.isFinite(loudnessDb)) {
-    gainDb = -loudnessDb;
-  } else if (
+  if (
     typeof perceptualLoudnessDb === "number" &&
     Number.isFinite(perceptualLoudnessDb)
   ) {
-    gainDb = VOLUME_NORMALIZATION_REFERENCE_DB - perceptualLoudnessDb;
+    return clampNormalizationGainDb(
+      VOLUME_NORMALIZATION_REFERENCE_DB - perceptualLoudnessDb,
+    );
   }
 
+  const loudnessDb = loudnessInfo?.loudnessDb;
+  if (typeof loudnessDb === "number" && Number.isFinite(loudnessDb)) {
+    return clampNormalizationGainDb(-Math.abs(loudnessDb));
+  }
+
+  return 0;
+}
+
+function clampNormalizationGainDb(gainDb: number): number {
   return Math.max(
     -MAX_VOLUME_NORMALIZATION_ATTENUATION_DB,
     Math.min(MAX_VOLUME_NORMALIZATION_BOOST_DB, gainDb),

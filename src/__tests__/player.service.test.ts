@@ -33,7 +33,29 @@ function restoreMethods(): void {
   }
 }
 
-function createSession(process: ChildProcess) {
+function waitFor(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+type TestSession = {
+  id: number;
+  purpose: "active" | "standby" | "retiring";
+  source: { type: "stream"; value: string };
+  volumeMultiplier: number;
+  targetVolume: number;
+  process: ChildProcess;
+  ipcSocket: null;
+  ipcPath: string;
+  ipcConnectRetries: number;
+  eofHandled: boolean;
+  ready: boolean;
+  trackId: string;
+  confirmation: null;
+};
+
+function createSession(process: ChildProcess): TestSession {
   return {
     id: 1,
     purpose: "active" as const,
@@ -161,6 +183,70 @@ describe("PlayerService - seek functionality", () => {
 
       playerService.setVolume(100);
       expect(playerService.getVolume()).toBe(100);
+    });
+
+    test("should update standby target volume when user volume changes", () => {
+      const fakeProcess = {} as ChildProcess;
+      const standby = {
+        ...createSession(fakeProcess),
+        id: 2,
+        purpose: "standby" as const,
+        trackId: "track-2",
+        volumeMultiplier: 1.5,
+      };
+      const setVolumeSpy = mock((_session: unknown, _volume: number) => true);
+      const player = playerService as unknown as {
+        standbySession: typeof standby | null;
+        setSessionVolume: (
+          session: typeof standby,
+          volume: number,
+        ) => boolean;
+      };
+
+      stubMethod(
+        player,
+        "setSessionVolume",
+        setVolumeSpy as unknown as typeof player.setSessionVolume,
+      );
+
+      player.standbySession = standby;
+
+      playerService.setVolume(80);
+
+      expect(standby.targetVolume).toBe(120);
+      expect(setVolumeSpy).toHaveBeenCalledWith(standby, 120);
+    });
+
+    test("should update standby target volume when track multiplier changes", () => {
+      const fakeProcess = {} as ChildProcess;
+      const standby = {
+        ...createSession(fakeProcess),
+        id: 2,
+        purpose: "standby" as const,
+        trackId: "track-2",
+      };
+      const setVolumeSpy = mock((_session: unknown, _volume: number) => true);
+      const player = playerService as unknown as {
+        standbySession: typeof standby | null;
+        setSessionVolume: (
+          session: typeof standby,
+          volume: number,
+        ) => boolean;
+      };
+
+      stubMethod(
+        player,
+        "setSessionVolume",
+        setVolumeSpy as unknown as typeof player.setSessionVolume,
+      );
+
+      player.standbySession = standby;
+
+      playerService.setTrackVolumeMultiplier("track-2", 1.6);
+
+      expect(standby.volumeMultiplier).toBe(1.6);
+      expect(standby.targetVolume).toBe(112);
+      expect(setVolumeSpy).toHaveBeenCalledWith(standby, 112);
     });
   });
 
@@ -375,6 +461,177 @@ describe("PlayerService - seek functionality", () => {
       );
       expect(playerService.isCurrentlyPlaying()).toBe(false);
       expect(player.activeSession).toBeNull();
+    });
+
+    test("should restore target volume when promoting a preloaded session", async () => {
+      const outgoing = createSession({
+        kill: mock(() => true),
+      } as unknown as ChildProcess);
+      const standby = {
+        ...createSession({
+          kill: mock(() => true),
+        } as unknown as ChildProcess),
+        id: 2,
+        purpose: "standby" as const,
+        trackId: "track-2",
+        volumeMultiplier: 1.2,
+        targetVolume: 84,
+      };
+      const setPausedSpy = mock((_session: unknown, _paused: boolean) => true);
+      const setVolumeSpy = mock((_session: unknown, _volume: number) => true);
+      const player = playerService as unknown as {
+        activeSession: typeof outgoing | null;
+        standbySession: typeof standby | null;
+        setSessionPaused: (
+          session: typeof standby,
+          paused: boolean,
+        ) => boolean;
+        setSessionVolume: (
+          session: typeof standby,
+          volume: number,
+        ) => boolean;
+      };
+
+      stubMethod(
+        player,
+        "setSessionPaused",
+        setPausedSpy as unknown as typeof player.setSessionPaused,
+      );
+      stubMethod(
+        player,
+        "setSessionVolume",
+        setVolumeSpy as unknown as typeof player.setSessionVolume,
+      );
+
+      player.activeSession = outgoing;
+      player.standbySession = standby;
+
+      const promoted = await playerService.playPreloaded("track-2");
+
+      expect(promoted).toBe(true);
+      expect(player.activeSession).toBe(standby);
+      expect(player.standbySession).toBeNull();
+      expect(standby.targetVolume).toBe(84);
+      expect(setPausedSpy).toHaveBeenCalledWith(standby, false);
+      expect(setVolumeSpy).toHaveBeenCalledWith(standby, standby.targetVolume);
+    });
+
+    test("should finalize crossfade with the incoming target volume", async () => {
+      const outgoing = createSession({
+        kill: mock(() => true),
+      } as unknown as ChildProcess);
+      const incoming = {
+        ...createSession({
+          kill: mock(() => true),
+        } as unknown as ChildProcess),
+        id: 2,
+        purpose: "standby" as const,
+        trackId: "track-2",
+        volumeMultiplier: 92 / 70,
+        targetVolume: 92,
+      };
+      const setPausedSpy = mock((_session: unknown, _paused: boolean) => true);
+      const setVolumeSpy = mock((_session: unknown, _volume: number) => true);
+      const player = playerService as unknown as {
+        activeSession: typeof outgoing | null;
+        standbySession: typeof incoming | null;
+        setSessionPaused: (
+          session: typeof incoming,
+          paused: boolean,
+        ) => boolean;
+        setSessionVolume: (
+          session: typeof incoming | typeof outgoing,
+          volume: number,
+        ) => boolean;
+      };
+
+      stubMethod(
+        player,
+        "setSessionPaused",
+        setPausedSpy as unknown as typeof player.setSessionPaused,
+      );
+      stubMethod(
+        player,
+        "setSessionVolume",
+        setVolumeSpy as unknown as typeof player.setSessionVolume,
+      );
+
+      player.activeSession = outgoing;
+      player.standbySession = incoming;
+
+      const didStart = await playerService.crossfadeToPreloaded("track-2", 100);
+      await waitFor(160);
+
+      expect(didStart).toBe(true);
+      expect(player.activeSession).toBe(incoming);
+      expect(incoming.targetVolume).toBeCloseTo(92, 10);
+      expect(setPausedSpy).toHaveBeenCalledWith(incoming, false);
+      expect(setVolumeSpy).toHaveBeenCalledWith(incoming, 0);
+      expect(
+        setVolumeSpy.mock.calls.some(
+          ([session, volume]) =>
+            session === incoming &&
+            typeof volume === "number" &&
+            Math.abs(volume - incoming.targetVolume) < 1e-6,
+        ),
+      ).toBe(true);
+      expect(setVolumeSpy).toHaveBeenCalledWith(outgoing, 0);
+    });
+
+    test("should restore the active target volume when crossfade is interrupted", () => {
+      const outgoing = {
+        ...createSession({
+          kill: mock(() => true),
+        } as unknown as ChildProcess),
+        id: 1,
+        purpose: "retiring" as const,
+        trackId: "track-1",
+      };
+      const incoming = {
+        ...createSession({
+          kill: mock(() => true),
+        } as unknown as ChildProcess),
+        id: 2,
+        trackId: "track-2",
+        targetVolume: 96,
+      };
+      const setVolumeSpy = mock((_session: unknown, _volume: number) => true);
+      const player = playerService as unknown as {
+        activeSession: typeof incoming | null;
+        retiringSessions: Set<typeof outgoing>;
+        crossfadeTimer: ReturnType<typeof setInterval> | null;
+        setSessionVolume: (
+          session: typeof incoming,
+          volume: number,
+        ) => boolean;
+        stopSpecificSession: (session: typeof outgoing | null) => void;
+        finalizeCrossfadeInterruption: () => void;
+      };
+
+      stubMethod(
+        player,
+        "setSessionVolume",
+        setVolumeSpy as unknown as typeof player.setSessionVolume,
+      );
+      stubMethod(
+        player,
+        "stopSpecificSession",
+        ((session: typeof outgoing | null) => {
+          if (session) {
+            player.retiringSessions.delete(session);
+          }
+        }) as typeof player.stopSpecificSession,
+      );
+
+      player.activeSession = incoming;
+      player.retiringSessions = new Set([outgoing]);
+      player.crossfadeTimer = setInterval(() => {}, 1000);
+
+      player.finalizeCrossfadeInterruption();
+
+      expect(setVolumeSpy).toHaveBeenCalledWith(incoming, 96);
+      expect(player.retiringSessions.size).toBe(0);
+      expect(player.crossfadeTimer).toBeNull();
     });
   });
 });

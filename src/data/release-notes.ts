@@ -1,6 +1,40 @@
 import type { ReleaseNotesEntry } from "../types/index.ts";
 
 const fallbackReleaseNotesByVersion: Record<string, ReleaseNotesEntry> = {
+  "0.7.7": {
+    version: "0.7.7",
+    title: "音量播放修正",
+    publishedAt: "2026-03-29",
+    status: "preview",
+    summary:
+      "修正切歌偶發靜音，並重新校準音量平衡對 YouTube loudness metadata 的換算與同步時機。",
+    sections: [
+      {
+        category: "fixed",
+        title: "播放穩定性修復",
+        description: "優先處理直接影響切歌可用性的 regression。",
+        items: [
+          "修正切到下一首時偶發無聲，避免預載與 Crossfade 轉場遺失目標音量。",
+        ],
+      },
+      {
+        category: "changed",
+        title: "音量平衡調整",
+        description: "讓音量平衡改用更穩定、可預期的 metadata 解讀與同步流程。",
+        items: [
+          "修正音量平衡對 YouTube loudness metadata 的換算與套用時機，讓不同歌曲的體感音量更一致。",
+        ],
+      },
+      {
+        category: "fixed",
+        title: "回歸驗證補強",
+        description: "把這次修正轉成可重複驗證的測試，降低再次發生的機率。",
+        items: [
+          "補上播放器音量同步與版本說明的 regression tests，降低後續再發機率。",
+        ],
+      },
+    ],
+  },
   "0.7.6": {
     version: "0.7.6",
     title: "Discover 體驗定稿與播放增強",
