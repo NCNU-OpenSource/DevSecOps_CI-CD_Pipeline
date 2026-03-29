@@ -39,7 +39,7 @@ const fallbackReleaseNotesByVersion: Record<string, ReleaseNotesEntry> = {
     version: "0.7.6",
     title: "Discover 體驗定稿與播放增強",
     publishedAt: "2026-03-28",
-    status: "preview",
+    status: "released",
     summary:
       "把 Discover 補成更完整的探索入口，加入音樂影片焦點展示、榜單化熱門點播，以及更聰明的自動 Mix 與播放調整。",
     sections: [
@@ -80,7 +80,7 @@ const fallbackReleaseNotesByVersion: Record<string, ReleaseNotesEntry> = {
     version: "0.7.0",
     title: "Discover 多市場探索",
     publishedAt: "2026-03-28",
-    status: "preview",
+    status: "released",
     summary: "把探索體驗從搜尋頁獨立出來，改成可切換 8 個市場的 Discover 首頁。",
     sections: [
       {
