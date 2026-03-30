@@ -10,6 +10,7 @@
 - 📋 **播放清單**：查看和管理排隊中的歌曲
 - 📝 **同步歌詞**：即時顯示歌詞（支援 LRC 格式）
 - 🔄 **即時同步**：透過 WebSocket 即時更新所有客戶端的狀態
+- 🔉 **音量平衡**：依 YouTube loudness metadata 自動衰減偏 loud 的歌曲，不會額外放大較安靜的曲目
 - 💾 **持久化同步 Session**：容器重啟後保留配對關係，不需要重新配對
 - 🏷️ **版本可見性**：前端 Header 與後端 API 會顯示目前系統版本與 Git SHA
 
@@ -35,13 +36,13 @@
 
 ### 關鍵服務責任
 
-- [music.service.ts](/Users/bs10081/Developer/youtube_music_bot/src/services/music.service.ts)
+- [music.service.ts](src/services/music.service.ts)
   負責搜尋、歌詞、mix、串流 URL 提取
-- [queue.service.ts](/Users/bs10081/Developer/youtube_music_bot/src/services/queue.service.ts)
+- [queue.service.ts](src/services/queue.service.ts)
   負責 queue、mix、radio、播放策略與 fallback 決策
-- [player.service.ts](/Users/bs10081/Developer/youtube_music_bot/src/services/player.service.ts)
+- [player.service.ts](src/services/player.service.ts)
   負責 mpv 行程、IPC 狀態同步、pause/resume/seek/stop
-- [ytdlp.ts](/Users/bs10081/Developer/youtube_music_bot/src/utils/ytdlp.ts)
+- [ytdlp.ts](src/utils/ytdlp.ts)
   負責 `yt-dlp` extractor args 與 cookies 設定
 
 ### 與 anti-bot 有關的設定
@@ -146,7 +147,7 @@ bun run dev
 npm run dev:frontend
 ```
 
-前端會在 http://localhost:5173 啟動，並自動代理 API 到後端 http://localhost:3000。
+前端會在 http://localhost:5174 啟動，並自動代理 API 到後端 http://localhost:3000。
 
 **方式二：僅啟動後端（使用舊版 HTML5 前端）**
 
@@ -576,7 +577,7 @@ docker compose exec -T youtube-music-bot which yt-dlp
 docker compose exec -T youtube-music-bot yt-dlp --version
 ```
 
-本專案的 [Dockerfile](/Users/bs10081/Developer/youtube_music_bot/Dockerfile) 已經在 runtime image 中安裝 `yt-dlp`。
+本專案的 [Dockerfile](Dockerfile) 已經在 runtime image 中安裝 `yt-dlp`。
 
 ### 6. JSON Parse error: `Expected '}'`
 
@@ -639,7 +640,7 @@ volumes:
 
 Workflow 檔案位置：
 
-- [.github/workflows/docker-image.yml](/Users/bs10081/Developer/youtube_music_bot/.github/workflows/docker-image.yml)
+- [.github/workflows/docker-image.yml](.github/workflows/docker-image.yml)
 
 ### 需要設定的 GitHub Secrets
 
@@ -787,7 +788,7 @@ Workflow 檔案位置：
 ## 檔案結構
 
 ```
-youtube_music_bot/
+youtube-music-bot/
 ├── package.json
 ├── tsconfig.json
 ├── README.md
