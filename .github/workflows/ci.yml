@@ -1,0 +1,769 @@
+name: Integrated DevSecOps CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  # 保留原作者 Docker image 名稱作為教材識別用
+  # 但本 CI 不會 push 到原作者 Docker Hub
+  IMAGE_NAME: bs10081/youtube-music-bot
+
+  # CI 內部使用的本地 Docker image 名稱
+  LOCAL_IMAGE_NAME: ci-test/youtube-music-bot:latest
+
+jobs:
+  # ==========================================================
+  # Job 1：SAST
+  # Static Application Security Testing
+  #
+  # 工具：Semgrep
+  # 目的：
+  # - 掃描原始碼安全問題
+  # - 對應 OWASP Top 10
+  #
+  # 掃描對象：
+  # - src/
+  # - frontend/
+  # - Dockerfile
+  # - docker-compose.yml
+  # - .github/workflows/
+  #
+  # 特點：
+  # - 不需要 Build
+  # - 不需要啟動網站
+  # ==========================================================
+  sast:
+    name: SAST - Semgrep OWASP Top 10
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep SAST scan
+        run: |
+          semgrep \
+            --config=p/owasp-top-ten \
+            --config=p/javascript \
+            --config=p/typescript \
+            --config=p/react \
+            --config=p/docker \
+            --config=p/github-actions \
+            --json \
+            --output=semgrep-report.json \
+            . || true
+
+      - name: Show SAST result in GitHub Summary
+        if: always()
+        run: |
+          echo "## SAST - Semgrep Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tool: **Semgrep**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Rule sets:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OWASP Top 10" >> "$GITHUB_STEP_SUMMARY"
+          echo "- JavaScript" >> "$GITHUB_STEP_SUMMARY"
+          echo "- TypeScript" >> "$GITHUB_STEP_SUMMARY"
+          echo "- React" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Docker" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitHub Actions" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          report_path = Path("semgrep-report.json")
+
+          if not report_path.exists():
+              print("Semgrep report was not generated.")
+              raise SystemExit(0)
+
+          with report_path.open("r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          results = data.get("results", [])
+
+          print("### Findings count")
+          print("")
+          print(f"Total findings: **{len(results)}**")
+          print("")
+
+          if results:
+              print("### Findings preview")
+              print("")
+              print("| No. | Rule | File | Line | Message |")
+              print("|---:|---|---|---:|---|")
+
+              for i, r in enumerate(results[:20], start=1):
+                  rule = r.get("check_id", "")
+                  path = r.get("path", "")
+                  line = r.get("start", {}).get("line", "")
+                  msg = r.get("extra", {}).get("message", "")
+                  msg = msg.replace("|", "\\|").replace("\n", " ")
+
+                  print(f"| {i} | `{rule}` | `{path}` | {line} | {msg} |")
+
+              if len(results) > 20:
+                  print("")
+                  print(f"Only first 20 findings are shown. Full result is available in `semgrep-report.json`.")
+          else:
+              print("No Semgrep findings were detected.")
+          PY
+
+      - name: Upload SAST report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-semgrep-report
+          path: semgrep-report.json
+          if-no-files-found: warn
+
+  # ==========================================================
+  # Job 2：SCA-Source
+  # Software Composition Analysis before Build
+  #
+  # 工具：
+  # - Snyk
+  # - Syft
+  # - Grype
+  #
+  # 目的：
+  # - 掃描原始專案的第三方套件漏洞
+  # - 產生 source-level SBOM
+  # - 使用 Grype 根據 SBOM 掃漏洞
+  #
+  # 掃描對象：
+  # - package.json
+  # - bun.lock
+  # - frontend/package.json
+  # - frontend/package-lock.json
+  #
+  # 特點：
+  # - 不需要完整 Build
+  # - 但需要安裝 / 解析 dependencies
+  # ==========================================================
+  sca_source:
+    name: SCA-Source - Snyk Syft Grype
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dependencies with Bun
+        run: bun install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci || npm install
+
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Run Snyk SCA scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "SNYK_TOKEN is not set. Skipping Snyk scan." | tee snyk-sca-report.json
+            exit 0
+          fi
+
+          snyk auth "$SNYK_TOKEN"
+
+          snyk test \
+            --all-projects \
+            --severity-threshold=high \
+            --json-file-output=snyk-sca-report.json \
+            || true
+
+      - name: Install Syft and Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+
+      - name: Generate source SBOM with Syft
+        run: |
+          syft dir:. -o cyclonedx-json=sbom-source-cyclonedx.json
+
+      - name: Run Grype scan from source SBOM
+        run: |
+          grype sbom:sbom-source-cyclonedx.json -o json > grype-source-sbom-report.json || true
+
+      - name: Show SCA-Source result in GitHub Summary
+        if: always()
+        run: |
+          echo "## SCA-Source Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Tools" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Snyk**：掃描第三方套件與相依套件漏洞" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Syft**：產生 source-level SBOM" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Grype**：根據 SBOM 掃描已知漏洞" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Generated files" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`snyk-sca-report.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sbom-source-cyclonedx.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`grype-source-sbom-report.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### SBOM component count" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          sbom_path = Path("sbom-source-cyclonedx.json")
+          if sbom_path.exists():
+              with sbom_path.open("r", encoding="utf-8") as f:
+                  sbom = json.load(f)
+              components = sbom.get("components", [])
+              print(f"Total source SBOM components: **{len(components)}**")
+          else:
+              print("Source SBOM file was not generated.")
+          PY
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Grype vulnerability count" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          from collections import Counter
+
+          report_path = Path("grype-source-sbom-report.json")
+
+          if not report_path.exists():
+              print("Grype source report was not generated.")
+              raise SystemExit(0)
+
+          with report_path.open("r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          matches = data.get("matches", [])
+          print(f"Total Grype source findings: **{len(matches)}**")
+          print("")
+
+          if matches:
+              severities = Counter(
+                  m.get("vulnerability", {}).get("severity", "Unknown")
+                  for m in matches
+              )
+
+              print("| Severity | Count |")
+              print("|---|---:|")
+              for sev, count in severities.items():
+                  print(f"| {sev} | {count} |")
+
+              print("")
+              print("### Findings preview")
+              print("")
+              print("| No. | Package | Version | Vulnerability | Severity |")
+              print("|---:|---|---|---|---|")
+
+              for i, m in enumerate(matches[:20], start=1):
+                  artifact = m.get("artifact", {})
+                  vuln = m.get("vulnerability", {})
+
+                  package = artifact.get("name", "")
+                  version = artifact.get("version", "")
+                  vuln_id = vuln.get("id", "")
+                  severity = vuln.get("severity", "")
+
+                  print(f"| {i} | `{package}` | `{version}` | `{vuln_id}` | {severity} |")
+
+              if len(matches) > 20:
+                  print("")
+                  print(f"Only first 20 findings are shown. Full result is available in `grype-source-sbom-report.json`.")
+          else:
+              print("No Grype source vulnerabilities were detected.")
+          PY
+
+      - name: Upload SCA-Source reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-source-reports
+          path: |
+            snyk-sca-report.json
+            sbom-source-cyclonedx.json
+            grype-source-sbom-report.json
+          if-no-files-found: warn
+
+  # ==========================================================
+  # Job 3：Build
+  #
+  # 目的：
+  # - 安裝 dependencies
+  # - 建置前後端
+  # - 建立 Docker image
+  # - 將 Docker image 存成 artifact 給後續 job 使用
+  #
+  # 注意：
+  # - 不登入 Docker Hub
+  # - 不 push 到原作者 Docker Hub
+  # ==========================================================
+  build:
+    name: Build - App and Docker Image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dependencies with Bun
+        run: bun install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci || npm install
+
+      - name: Build application
+        run: npm run build:all
+
+      - name: Read build metadata
+        id: build_meta
+        run: |
+          app_version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')
+          git_sha_short=$(git rev-parse --short "$GITHUB_SHA")
+          {
+            echo "app_version=$app_version"
+            echo "git_sha_short=$git_sha_short"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=main
+            type=sha,prefix=sha-
+
+      - name: Build Docker image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: |
+            ${{ env.LOCAL_IMAGE_NAME }}
+            ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.version=${{ steps.build_meta.outputs.app_version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ steps.build_meta.outputs.app_version }}
+            APP_GIT_SHA=${{ steps.build_meta.outputs.git_sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save Docker image to tar
+        run: |
+          docker save -o docker-image.tar ${{ env.LOCAL_IMAGE_NAME }}
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: docker-image.tar
+          retention-days: 1
+
+      - name: Show Build result in GitHub Summary
+        if: always()
+        run: |
+          echo "## Build Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Build Steps" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Install root dependencies with Bun" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Install frontend dependencies with npm" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Run \`npm run build:all\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Build Docker image locally" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Save Docker image as artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Docker Image" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Public image label: \`${{ env.IMAGE_NAME }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Local CI image: \`${{ env.LOCAL_IMAGE_NAME }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Push to Docker Hub: **false**" >> "$GITHUB_STEP_SUMMARY"
+
+  # ==========================================================
+  # Job 4：SCA-Image
+  # Software Composition Analysis after Build
+  #
+  # 目的：
+  # - 掃描 Build 產生的 Docker image
+  # - 產生 image-level SBOM
+  # - 使用 Grype 掃描 image SBOM 漏洞
+  #
+  # 需要：
+  # - build job 產出的 docker-image artifact
+  # ==========================================================
+  sca_image:
+    name: SCA-Image - Docker Image SBOM and Grype
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: docker load -i docker-image.tar
+
+      - name: Install Syft and Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+
+      - name: Generate image SBOM with Syft
+        run: |
+          syft ${{ env.LOCAL_IMAGE_NAME }} -o cyclonedx-json=sbom-image-cyclonedx.json
+
+      - name: Run Grype scan from image SBOM
+        run: |
+          grype sbom:sbom-image-cyclonedx.json -o json > grype-image-sbom-report.json || true
+
+      - name: Show SCA-Image result in GitHub Summary
+        if: always()
+        run: |
+          echo "## SCA-Image Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Tools" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Syft**：產生 Docker image SBOM" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Grype**：根據 image SBOM 掃描漏洞" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Generated files" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sbom-image-cyclonedx.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`grype-image-sbom-report.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Image SBOM component count" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          sbom_path = Path("sbom-image-cyclonedx.json")
+          if sbom_path.exists():
+              with sbom_path.open("r", encoding="utf-8") as f:
+                  sbom = json.load(f)
+              components = sbom.get("components", [])
+              print(f"Total image SBOM components: **{len(components)}**")
+          else:
+              print("Image SBOM file was not generated.")
+          PY
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Grype image vulnerability count" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          from collections import Counter
+
+          report_path = Path("grype-image-sbom-report.json")
+
+          if not report_path.exists():
+              print("Grype image report was not generated.")
+              raise SystemExit(0)
+
+          with report_path.open("r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          matches = data.get("matches", [])
+          print(f"Total Grype image findings: **{len(matches)}**")
+          print("")
+
+          if matches:
+              severities = Counter(
+                  m.get("vulnerability", {}).get("severity", "Unknown")
+                  for m in matches
+              )
+
+              print("| Severity | Count |")
+              print("|---|---:|")
+              for sev, count in severities.items():
+                  print(f"| {sev} | {count} |")
+
+              print("")
+              print("### Findings preview")
+              print("")
+              print("| No. | Package | Version | Vulnerability | Severity |")
+              print("|---:|---|---|---|---|")
+
+              for i, m in enumerate(matches[:20], start=1):
+                  artifact = m.get("artifact", {})
+                  vuln = m.get("vulnerability", {})
+
+                  package = artifact.get("name", "")
+                  version = artifact.get("version", "")
+                  vuln_id = vuln.get("id", "")
+                  severity = vuln.get("severity", "")
+
+                  print(f"| {i} | `{package}` | `{version}` | `{vuln_id}` | {severity} |")
+
+              if len(matches) > 20:
+                  print("")
+                  print(f"Only first 20 findings are shown. Full result is available in `grype-image-sbom-report.json`.")
+          else:
+              print("No Grype image vulnerabilities were detected.")
+          PY
+
+      - name: Upload SCA-Image reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-image-reports
+          path: |
+            sbom-image-cyclonedx.json
+            grype-image-sbom-report.json
+          if-no-files-found: warn
+
+  # ==========================================================
+  # Job 5：DAST
+  # Dynamic Application Security Testing
+  #
+  # 工具：OWASP ZAP
+  # 目的：
+  # - 使用 Build 產生的 Docker image
+  # - 啟動網站
+  # - 對 http://localhost:3000 做動態安全掃描
+  #
+  # 需要：
+  # - build job 產出的 docker-image artifact
+  # ==========================================================
+  dast:
+    name: DAST - OWASP ZAP
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: docker load -i docker-image.tar
+
+      - name: Start application container
+        run: |
+          docker run -d \
+            --name youtube-music-bot \
+            -p 3000:3000 \
+            -e NODE_ENV=production \
+            -e LOG_LEVEL=INFO \
+            -e YTDLP_EXTRACTOR_ARGS="youtube:player_client=android_vr" \
+            ${{ env.LOCAL_IMAGE_NAME }}
+
+      - name: Wait for application
+        run: |
+          echo "Waiting for http://localhost:3000 ..."
+          for i in $(seq 1 40); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
+            if echo "$STATUS" | grep -qE "^[2-4]"; then
+              echo "Application is up with HTTP $STATUS"
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "Application did not start in time."
+          docker logs youtube-music-bot || true
+          exit 1
+
+      - name: Run OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "http://localhost:3000"
+          fail_action: false
+          allow_issue_writing: false
+          cmd_options: "-a -I"
+
+      - name: Show DAST result in GitHub Summary
+        if: always()
+        run: |
+          echo "## DAST - OWASP ZAP Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Tool" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **OWASP ZAP Baseline Scan**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Target" >> "$GITHUB_STEP_SUMMARY"
+          echo "- http://localhost:3000" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Generated files" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`report_html.html\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`report_md.md\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`report_json.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`app.log\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f report_md.md ]; then
+            echo "### ZAP Markdown Report Preview" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            head -n 80 report_md.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ZAP markdown report was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Save application logs
+        if: always()
+        run: |
+          docker logs youtube-music-bot > app.log 2>&1 || true
+
+      - name: Upload DAST reports and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-zap-reports
+          path: |
+            app.log
+            report_html.html
+            report_md.md
+            report_json.json
+          if-no-files-found: warn
+
+      - name: Clean up container
+        if: always()
+        run: |
+          docker rm -f youtube-music-bot || true
+
+  # ==========================================================
+  # Job 6：Summary
+  #
+  # 目的：
+  # - 等待所有安全測試與 build 完成
+  # - 彙整 job 結果
+  # - 列出所有產出報告
+  # ==========================================================
+  summary:
+    name: Final - DevSecOps Summary
+    runs-on: ubuntu-latest
+
+    needs:
+      - sast
+      - sca_source
+      - build
+      - sca_image
+      - dast
+
+    if: always()
+
+    steps:
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+        continue-on-error: true
+
+      - name: Generate final GitHub Step Summary
+        run: |
+          echo "## Integrated DevSecOps CI Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Pipeline structure" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`text" >> "$GITHUB_STEP_SUMMARY"
+          echo "SAST ───────────────────────────┐" >> "$GITHUB_STEP_SUMMARY"
+          echo "                                 │" >> "$GITHUB_STEP_SUMMARY"
+          echo "SCA-Source ─────────────────────┤" >> "$GITHUB_STEP_SUMMARY"
+          echo "                                 ├── Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build ───→ SCA-Image ───────────┤" >> "$GITHUB_STEP_SUMMARY"
+          echo "        └→ DAST ────────────────┘" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Job Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Stage | Result | Description |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| SAST | ${{ needs.sast.result }} | Semgrep source code scan |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| SCA-Source | ${{ needs.sca_source.result }} | Snyk / Syft / Grype source dependency scan |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Build | ${{ needs.build.result }} | App build and Docker image build |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| SCA-Image | ${{ needs.sca_image.result }} | Docker image SBOM and vulnerability scan |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| DAST | ${{ needs.dast.result }} | OWASP ZAP runtime web scan |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Generated Artifacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -d reports ]; then
+            find reports -maxdepth 3 -type f | sort | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
+          else
+            echo "No reports downloaded." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### 教材重點" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SAST**：使用 Semgrep 掃描原始碼，對應 OWASP Top 10。" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SCA-Source**：Build 前掃 package / lockfile / dependency tree，並產生 source SBOM。" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Build**：建置應用程式與 Docker image，但不 push 到 Docker Hub。" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SCA-Image**：Build 後掃 Docker image 實際包含的元件與漏洞。" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **DAST**：使用 Build 產出的 image 啟動網站，再用 OWASP ZAP 掃 localhost:3000。" >> "$GITHUB_STEP_SUMMARY"
