@@ -1,0 +1,186 @@
+name: 02 SCA - Snyk Grype SBOM
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sca:
+    name: SCA - Dependency and SBOM Scan
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      # Step 1：下載 repository 程式碼
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Step 2：安裝 Bun
+      # 你的專案 root 使用 bun.lock，因此需要 Bun 來安裝 root dependencies
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Step 3：安裝 Node.js
+      # frontend 是 React / Vite / npm 專案，因此需要 Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Step 4：安裝 root dependencies
+      # 這不是正式 Build，而是為了讓 SCA 工具能解析 dependency tree
+      - name: Install root dependencies with Bun
+        run: bun install --frozen-lockfile
+
+      # Step 5：安裝 frontend dependencies
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci || npm install
+
+      # Step 6：安裝 Snyk CLI
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      # Step 7：執行 Snyk SCA 掃描
+      # Snyk 會掃描 package.json、lockfile、dependency tree
+      # || true 代表教材版即使掃到漏洞，也不要讓 workflow 直接失敗
+      - name: Run Snyk SCA scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk auth "$SNYK_TOKEN"
+
+          snyk test \
+            --all-projects \
+            --severity-threshold=high \
+            --json-file-output=snyk-sca-report.json \
+            || true
+
+      # Step 8：安裝 Syft 與 Grype
+      # Syft：產生 SBOM
+      # Grype：根據 SBOM 或 filesystem 掃漏洞
+      - name: Install Syft and Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sudo sh -s -- -b /usr/local/bin
+
+      # Step 9：使用 Syft 產生 SBOM
+      # CycloneDX JSON 是常見 SBOM 格式
+      - name: Generate SBOM with Syft
+        run: |
+          syft dir:. -o cyclonedx-json=sbom-cyclonedx.json
+
+      # Step 10：使用 Grype 掃描 SBOM
+      - name: Run Grype scan from SBOM
+        run: |
+          grype sbom:sbom-cyclonedx.json -o json > grype-sbom-report.json || true
+
+      # Step 11：把 SCA 結果顯示在 GitHub Actions Summary
+      - name: Show SCA result in GitHub Summary
+        if: always()
+        run: |
+          echo "## SCA Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Tools" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Snyk**：掃描第三方套件與相依套件漏洞" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Syft**：產生 SBOM 軟體物料清單" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Grype**：根據 SBOM 掃描已知漏洞" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Generated files" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`snyk-sca-report.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sbom-cyclonedx.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`grype-sbom-report.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### SBOM package count" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          sbom_path = Path("sbom-cyclonedx.json")
+          if sbom_path.exists():
+              with sbom_path.open("r", encoding="utf-8") as f:
+                  sbom = json.load(f)
+              components = sbom.get("components", [])
+              print(f"Total SBOM components: **{len(components)}**")
+          else:
+              print("SBOM file was not generated.")
+          PY
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Grype vulnerability count" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          from collections import Counter
+
+          report_path = Path("grype-sbom-report.json")
+
+          if not report_path.exists():
+              print("Grype report was not generated.")
+              raise SystemExit(0)
+
+          with report_path.open("r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          matches = data.get("matches", [])
+          print(f"Total Grype findings: **{len(matches)}**")
+          print("")
+
+          if matches:
+              severities = Counter(
+                  m.get("vulnerability", {}).get("severity", "Unknown")
+                  for m in matches
+              )
+
+              print("| Severity | Count |")
+              print("|---|---:|")
+              for sev, count in severities.items():
+                  print(f"| {sev} | {count} |")
+
+              print("")
+              print("### Findings preview")
+              print("")
+              print("| No. | Package | Version | Vulnerability | Severity |")
+              print("|---:|---|---|---|---|")
+
+              for i, m in enumerate(matches[:20], start=1):
+                  artifact = m.get("artifact", {})
+                  vuln = m.get("vulnerability", {})
+
+                  package = artifact.get("name", "")
+                  version = artifact.get("version", "")
+                  vuln_id = vuln.get("id", "")
+                  severity = vuln.get("severity", "")
+
+                  print(f"| {i} | `{package}` | `{version}` | `{vuln_id}` | {severity} |")
+
+              if len(matches) > 20:
+                  print("")
+                  print(f"Only the first 20 findings are shown. Full result is available in `grype-sbom-report.json`.")
+          else:
+              print("No Grype vulnerabilities were detected.")
+          PY
+
+      # Step 12：上傳 SCA 報告與 SBOM
+      - name: Upload SCA reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-snyk-grype-sbom-reports
+          path: |
+            snyk-sca-report.json
+            sbom-cyclonedx.json
+            grype-sbom-report.json
