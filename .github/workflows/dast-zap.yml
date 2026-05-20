@@ -1,0 +1,177 @@
+name: 04 DAST - OWASP ZAP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dast:
+    name: DAST - OWASP ZAP Baseline Scan
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      # ============================================================
+      # Step 1：下載 repository 程式碼
+      # ============================================================
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # Step 2：安裝 Bun
+      # 你的專案後端使用 Bun / TypeScript / Hono
+      # ============================================================
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # ============================================================
+      # Step 3：安裝 Node.js
+      # frontend 是 React / Vite / npm 專案
+      # ============================================================
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ============================================================
+      # Step 4：安裝系統執行套件
+      # youtube-music-bot 可能會用到 mpv / yt-dlp
+      # DAST 主要掃 Web UI，但服務啟動時可能需要這些套件
+      # ============================================================
+      - name: Install system packages for runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpv yt-dlp
+
+      # ============================================================
+      # Step 5：安裝 root dependencies
+      # ============================================================
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+
+      # ============================================================
+      # Step 6：安裝 frontend dependencies
+      # ============================================================
+      - name: Install frontend dependencies
+        run: |
+          if [ -d "frontend" ]; then
+            (cd frontend && (npm ci || npm install))
+          fi
+
+      # ============================================================
+      # Step 7：Build application
+      # DAST 需要掃正在執行的網站，所以要先 build
+      # ============================================================
+      - name: Build application
+        run: npm run build:all
+
+      # ============================================================
+      # Step 8：啟動網站
+      # 預設服務位置：http://localhost:3000
+      # ============================================================
+      - name: Start application
+        run: |
+          npm run start > app.log 2>&1 &
+          echo $! > app.pid
+          sleep 30
+
+      # ============================================================
+      # Step 9：確認網站是否成功啟動
+      # 如果網站沒有起來，就輸出 app.log 協助除錯
+      # ============================================================
+      - name: Check application is running
+        run: |
+          echo "Checking http://localhost:3000 ..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
+
+          echo "HTTP status: $STATUS"
+
+          if echo "$STATUS" | grep -qE "^[2-4]"; then
+            echo "Application is running."
+          else
+            echo "Application did not start correctly."
+            echo "===== app.log ====="
+            cat app.log || true
+            exit 1
+          fi
+
+      # ============================================================
+      # Step 10：執行 OWASP ZAP Baseline Scan
+      #
+      # target：要掃描的網站
+      # fail_action: false：
+      #   教材展示版先不要因為掃到問題就讓 CI 失敗
+      # allow_issue_writing: false：
+      #   不自動建立 GitHub Issue
+      # cmd_options: "-a -I"：
+      #   -a：使用較完整的 passive scan 規則
+      #   -I：將 informational alerts 也列入報告
+      # ============================================================
+      - name: Run OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: "http://localhost:3000"
+          fail_action: false
+          allow_issue_writing: false
+          cmd_options: "-a -I"
+
+      # ============================================================
+      # Step 11：將 DAST 結果顯示在 GitHub Actions Summary
+      # ============================================================
+      - name: Show DAST result in GitHub Summary
+        if: always()
+        run: |
+          echo "## DAST - OWASP ZAP Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Test Target" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: http://localhost:3000" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Tool" >> "$GITHUB_STEP_SUMMARY"
+          echo "- OWASP ZAP Baseline Scan" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Generated Files" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`report_html.html\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`report_md.md\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`report_json.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`app.log\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f report_md.md ]; then
+            echo "### ZAP Markdown Report Preview" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            head -n 100 report_md.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ZAP markdown report was not generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ============================================================
+      # Step 12：上傳 ZAP 報告與應用程式 log
+      # ============================================================
+      - name: Upload DAST reports and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-zap-reports
+          path: |
+            app.log
+            report_html.html
+            report_md.md
+            report_json.json
+          if-no-files-found: warn
+
+      # ============================================================
+      # Step 13：關閉應用程式
+      # ============================================================
+      - name: Stop application
+        if: always()
+        run: |
+          if [ -f app.pid ]; then
+            kill "$(cat app.pid)" || true
+          fi
