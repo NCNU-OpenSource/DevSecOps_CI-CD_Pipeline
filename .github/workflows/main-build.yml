@@ -43,3 +43,7 @@ jobs:
         run: |
           test -f Dockerfile
           echo "Dockerfile exists."
+      - name: Check BuildKit connection
+        run: |
+          buildctl --version
+          buildctl --addr tcp://buildkitd.ci-build.svc.cluster.local:1234 debug workers
