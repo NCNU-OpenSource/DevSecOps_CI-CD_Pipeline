@@ -12,38 +12,96 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  REGISTRY: 10.32.20.51:30443
+  IMAGE_NAME: ci/youtube-music-bot
+  BUILDKIT_HOST: tcp://buildkitd.ci-build.svc.cluster.local:1234
+
 jobs:
-  preflight:
-    name: Main Build / Preflight
+  build-and-push:
+    name: Main Build / Build and Push Image
     runs-on: arc-runner-set
-    timeout-minutes: 10
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show build context
+      - name: Show Runner and BuildKit Info
         run: |
-          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner OS: $RUNNER_OS"
           echo "SHA: $GITHUB_SHA"
-          echo "Image tag will be:"
-          echo "10.32.20.51:30443/ci/youtube-music-bot:${GITHUB_SHA}"
 
-      - name: Check tools
+          buildctl --version
+          buildctl --addr "${BUILDKIT_HOST}" debug workers
+
+          df -h
+          free -h || true
+
+      - name: Prepare Image Tags
         run: |
-          echo "Checking available tools..."
-          node -v || true
-          npm -v || true
-          bun --version || true
-          docker version || true
-          buildctl --version || true
-          kubectl version --client || true
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          IMAGE_SHA="${REGISTRY}/${IMAGE_NAME}:${SHORT_SHA}"
+          IMAGE_LATEST="${REGISTRY}/${IMAGE_NAME}:latest"
+
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "IMAGE_SHA=${IMAGE_SHA}" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=${IMAGE_LATEST}" >> "$GITHUB_ENV"
+
+          echo "Image SHA tag: ${IMAGE_SHA}"
+          echo "Image latest tag: ${IMAGE_LATEST}"
+
+      - name: Configure Harbor Auth
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          mkdir -p ~/.docker
+
+          AUTH="$(printf "%s:%s" "$HARBOR_USERNAME" "$HARBOR_PASSWORD" | base64 -w0)"
+
+          cat > ~/.docker/config.json << EOF
+          {
+            "auths": {
+              "${REGISTRY}": {
+                "auth": "${AUTH}"
+              }
+            }
+          }
+          EOF
+
+          echo "Harbor auth configured."
 
       - name: Check Dockerfile
         run: |
           test -f Dockerfile
-          echo "Dockerfile exists."
-      - name: Check BuildKit connection
+          echo "Dockerfile found."
+
+      - name: Build and Push Image with BuildKit
         run: |
-          buildctl --version
-          buildctl --addr tcp://buildkitd.ci-build.svc.cluster.local:1234 debug workers
+          set -o pipefail
+
+          buildctl --addr "${BUILDKIT_HOST}" build \
+            --frontend dockerfile.v0 \
+            --local context=. \
+            --local dockerfile=. \
+            --opt filename=Dockerfile \
+            --output type=image,name="${IMAGE_SHA},${IMAGE_LATEST}",push=true
+
+      - name: Write Build Summary
+        if: always()
+        run: |
+          echo "## Main Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Registry | \`${REGISTRY}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image SHA | \`${IMAGE_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image Latest | \`${IMAGE_LATEST}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| BuildKit Host | \`${BUILDKIT_HOST}\` |" >> "$GITHUB_STEP_SUMMARY"
