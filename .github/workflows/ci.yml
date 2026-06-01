@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  static-analysis:
+    name: CI / Static Analysis
+    runs-on: arc-runner-set
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Runner Info
+        run: |
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner OS: $RUNNER_OS"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          nproc
+          df -h
+          free -h || true
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: |
+          bun install --frozen-lockfile
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Run Biome CI
+        run: |
+          set -o pipefail
+          biome ci --reporter=github . 2>&1 | tee biome-report.txt
+
+      - name: Run TypeScript Check
+        run: |
+          set -o pipefail
+
+          if [ -f tsconfig.json ]; then
+            bunx tsc --noEmit 2>&1 | tee tsc-report.txt
+          else
+            echo "No tsconfig.json found. Skip TypeScript check." | tee tsc-report.txt
+          fi
+
+      - name: Upload Static Analysis Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-analysis-reports
+          path: |
+            biome-report.txt
+            tsc-report.txt
+          if-no-files-found: warn
+
+  build-check:
+    name: CI / Build Check
+    runs-on: arc-runner-set
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Runner Info
+        run: |
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner OS: $RUNNER_OS"
+          nproc
+          df -h
+          free -h || true
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: |
+          bun install --frozen-lockfile
+
+      - name: Run Build Check
+        run: |
+          set -o pipefail
+
+          if bun run | grep -q "^  build"; then
+            bun run build 2>&1 | tee build-report.txt
+          else
+            echo "No build script found in package.json. Skip build check." | tee build-report.txt
+          fi
+
+      - name: Upload Build Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: build-report.txt
+          if-no-files-found: warn
