@@ -129,6 +129,18 @@ jobs:
 
           echo "Harbor auth registry key is consistent."
 
+      - name: Test Harbor Registry Auth
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          set -o pipefail
+
+          echo "Testing direct registry backend auth..."
+          curl -i -u "${HARBOR_USERNAME}:${HARBOR_PASSWORD}" \
+            "http://${REGISTRY}/v2/" \
+            | sed -n '1,40p'
+
       - name: Check Dockerfile
         run: |
           test -f Dockerfile
