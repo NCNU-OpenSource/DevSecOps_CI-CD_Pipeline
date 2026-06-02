@@ -75,36 +75,46 @@ jobs:
 
       - name: Configure Kubernetes Auth
         env:
-          K8S_ARC_RUNNER_TOKEN: ${{ secrets.K8S_ARC_RUNNER_TOKEN }}
+          K8S_CI_TOKEN_B64: ${{ secrets.K8S_CI_TOKEN_B64 }}
         run: |
           set -euo pipefail
 
-          SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
-          CA_FILE="${SA_DIR}/ca.crt"
-
-          if [ -z "${K8S_ARC_RUNNER_TOKEN:-}" ]; then
-            echo "K8S_ARC_RUNNER_TOKEN is empty."
+          if [ -z "${K8S_CI_TOKEN_B64:-}" ]; then
+            echo "K8S_CI_TOKEN_B64 is empty."
             exit 1
           fi
+
+          SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
+          CA_FILE="${SA_DIR}/ca.crt"
 
           if [ ! -f "${CA_FILE}" ]; then
             echo "Kubernetes CA file not found: ${CA_FILE}"
             exit 1
           fi
 
+          mkdir -p "$RUNNER_TEMP/kube"
+
+          printf "%s" "$K8S_CI_TOKEN_B64" \
+            | base64 -d \
+            | tr -d '\r\n ' > "$RUNNER_TEMP/kube/token"
+
+          echo "Decoded token size:"
+          wc -c "$RUNNER_TEMP/kube/token"
+
           KUBE_SERVER="https://kubernetes.default.svc"
+          KUBE_TOKEN="$(cat "$RUNNER_TEMP/kube/token")"
 
           kubectl config set-cluster in-cluster \
             --server="${KUBE_SERVER}" \
             --certificate-authority="${CA_FILE}" \
             --embed-certs=true
 
-          kubectl config set-credentials arc-runner \
-            --token="${K8S_ARC_RUNNER_TOKEN}"
+          kubectl config set-credentials ci-deployer \
+            --token="${KUBE_TOKEN}"
 
           kubectl config set-context in-cluster \
             --cluster=in-cluster \
-            --user=arc-runner
+            --user=ci-deployer
 
           kubectl config use-context in-cluster
 
