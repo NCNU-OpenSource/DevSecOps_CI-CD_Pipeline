@@ -237,16 +237,38 @@ jobs:
 
           "$RUNNER_TEMP/bin/syft" version
 
+      - name: Export Image OCI Archive with BuildKit
+        run: |
+          set -euo pipefail
+
+          IMAGE_OCI_TAR="image-${SHORT_SHA}.oci.tar"
+
+          echo "Exporting OCI archive for SBOM scan:"
+          echo "${IMAGE_OCI_TAR}"
+
+          buildctl --addr "${BUILDKIT_HOST}" build \
+            --progress=plain \
+            --frontend dockerfile.v0 \
+            --local context=. \
+            --local dockerfile=. \
+            --opt filename=Dockerfile \
+            --output type=oci,dest="${IMAGE_OCI_TAR}"
+
+          echo "IMAGE_OCI_TAR=${IMAGE_OCI_TAR}" >> "$GITHUB_ENV"
+
+          echo "OCI archive exported:"
+          ls -lh "${IMAGE_OCI_TAR}"
+
       - name: Generate Image SBOM
         run: |
           set -euo pipefail
 
           SBOM_FILE="sbom-${SHORT_SHA}.spdx.json"
 
-          echo "Generating SBOM for image:"
-          echo "${IMAGE_SHA}"
+          echo "Generating SBOM from OCI archive:"
+          echo "${IMAGE_OCI_TAR}"
 
-          syft "${IMAGE_SHA}" \
+          syft "oci-archive:${IMAGE_OCI_TAR}" \
             -o spdx-json="${SBOM_FILE}"
 
           echo "SBOM_FILE=${SBOM_FILE}" >> "$GITHUB_ENV"
