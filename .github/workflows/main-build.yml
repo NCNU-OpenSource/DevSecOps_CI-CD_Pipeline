@@ -152,6 +152,47 @@ jobs:
 
           echo "Harbor auth registry key is consistent."
 
+      - name: Test Harbor Frontend Auth
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          set -o pipefail
+
+          echo "Testing Harbor /v2/ auth..."
+          STATUS="$(curl -sk -o /tmp/harbor-v2.txt -w "%{http_code}" \
+            -u "${HARBOR_USERNAME}:${HARBOR_PASSWORD}" \
+            "https://${REGISTRY}/v2/")"
+
+          echo "Harbor /v2/ status: ${STATUS}"
+          sed -n '1,20p' /tmp/harbor-v2.txt || true
+
+          if [ "$STATUS" != "200" ]; then
+            echo "Harbor basic auth failed or robot account is invalid."
+            exit 1
+          fi
+
+          echo "Testing Harbor token for push scope..."
+          TOKEN_STATUS="$(curl -sk -o /tmp/harbor-token.json -w "%{http_code}" \
+            -u "${HARBOR_USERNAME}:${HARBOR_PASSWORD}" \
+            "https://${REGISTRY}/service/token?service=harbor-registry&scope=repository:${IMAGE_NAME}:pull,push")"
+
+          echo "Harbor token status: ${TOKEN_STATUS}"
+
+          if [ "$TOKEN_STATUS" != "200" ]; then
+            echo "Failed to get Harbor token for pull,push scope."
+            cat /tmp/harbor-token.json
+            exit 1
+          fi
+
+          if jq -e 'has("token") or has("access_token")' /tmp/harbor-token.json >/dev/null; then
+            echo "Harbor token for pull,push scope acquired."
+          else
+            echo "Harbor token response does not contain token."
+            jq 'keys' /tmp/harbor-token.json
+            exit 1
+          fi
+
       - name: Check Dockerfile
         run: |
           set -o pipefail
