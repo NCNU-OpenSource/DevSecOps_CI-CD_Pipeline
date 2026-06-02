@@ -73,6 +73,42 @@ jobs:
 
           "$RUNNER_TEMP/bin/kubectl" version --client
 
+      - name: Configure Kubernetes In-Cluster Auth
+        run: |
+          set -euo pipefail
+
+          SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
+          TOKEN_FILE="${SA_DIR}/token"
+          CA_FILE="${SA_DIR}/ca.crt"
+
+          if [ ! -f "${TOKEN_FILE}" ]; then
+            echo "ServiceAccount token not found: ${TOKEN_FILE}"
+            echo "The runner pod may not have automountServiceAccountToken enabled."
+            exit 1
+          fi
+
+          if [ ! -f "${CA_FILE}" ]; then
+            echo "Kubernetes CA file not found: ${CA_FILE}"
+            exit 1
+          fi
+
+          KUBE_SERVER="https://kubernetes.default.svc"
+
+          kubectl config set-cluster in-cluster \
+            --server="${KUBE_SERVER}" \
+            --certificate-authority="${CA_FILE}"
+
+          kubectl config set-credentials arc-runner \
+            --token="$(cat "${TOKEN_FILE}")"
+
+          kubectl config set-context in-cluster \
+            --cluster=in-cluster \
+            --user=arc-runner
+
+          kubectl config use-context in-cluster
+
+          kubectl cluster-info
+
       - name: Check Kubernetes Access
         run: |
           set -euo pipefail
@@ -81,11 +117,13 @@ jobs:
           kubectl version --client
 
           echo "Checking Kubernetes permissions..."
-          kubectl auth can-i create namespace
-          kubectl auth can-i create deployment -A
-          kubectl auth can-i create service -A
-          kubectl auth can-i create job -A
-          kubectl auth can-i delete namespace
+          kubectl auth can-i create namespaces
+          kubectl auth can-i delete namespaces
+          kubectl auth can-i create deployments.apps -A
+          kubectl auth can-i create services -A
+          kubectl auth can-i create jobs.batch -A
+          kubectl auth can-i get pods -A
+          kubectl auth can-i logs pods -A
 
           echo "Kubernetes access OK."
 
