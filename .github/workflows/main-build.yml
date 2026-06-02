@@ -53,6 +53,26 @@ jobs:
           echo "Memory:"
           free -h || true
 
+      - name: Install kubectl
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/bin"
+
+          KUBECTL_VERSION="v1.30.14"
+
+          echo "Installing kubectl ${KUBECTL_VERSION}"
+
+          curl -L --fail --retry 3 \
+            -o "$RUNNER_TEMP/bin/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+
+          chmod +x "$RUNNER_TEMP/bin/kubectl"
+
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+          "$RUNNER_TEMP/bin/kubectl" version --client
+
       - name: Check Kubernetes Access
         run: |
           set -euo pipefail
