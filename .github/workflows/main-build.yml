@@ -80,6 +80,10 @@ jobs:
           SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
           TOKEN_FILE="${SA_DIR}/token"
           CA_FILE="${SA_DIR}/ca.crt"
+          NAMESPACE_FILE="${SA_DIR}/namespace"
+
+          echo "Checking ServiceAccount mount..."
+          ls -l "${SA_DIR}" || true
 
           if [ ! -f "${TOKEN_FILE}" ]; then
             echo "ServiceAccount token not found: ${TOKEN_FILE}"
@@ -92,14 +96,24 @@ jobs:
             exit 1
           fi
 
+          echo "ServiceAccount namespace:"
+          cat "${NAMESPACE_FILE}" || true
+
+          echo "Token size:"
+          wc -c "${TOKEN_FILE}"
+
+          echo "CA size:"
+          wc -c "${CA_FILE}"
+
           KUBE_SERVER="https://kubernetes.default.svc"
 
           kubectl config set-cluster in-cluster \
             --server="${KUBE_SERVER}" \
-            --certificate-authority="${CA_FILE}"
+            --certificate-authority="${CA_FILE}" \
+            --embed-certs=true
 
           kubectl config set-credentials arc-runner \
-            --token="$(cat "${TOKEN_FILE}")"
+            --token="$(tr -d '\n' < "${TOKEN_FILE}")"
 
           kubectl config set-context in-cluster \
             --cluster=in-cluster \
@@ -107,7 +121,11 @@ jobs:
 
           kubectl config use-context in-cluster
 
-          kubectl cluster-info
+          echo "Current kubectl config:"
+          kubectl config view --minify --raw
+
+          echo "Testing Kubernetes API access..."
+          kubectl get --raw=/version
 
       - name: Check Kubernetes Access
         run: |
