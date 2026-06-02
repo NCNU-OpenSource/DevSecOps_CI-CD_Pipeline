@@ -1,3 +1,4 @@
+```yaml
 name: Main Build
 
 on:
@@ -14,7 +15,6 @@ permissions:
 
 env:
   REGISTRY: 10.32.20.51:30443
-
   IMAGE_NAME: ci/youtube-music-bot
   BUILDKIT_HOST: tcp://buildkitd.ci-build.svc.cluster.local:1234
 
@@ -34,11 +34,13 @@ jobs:
 
       - name: Show Runner and BuildKit Info
         run: |
-          set -o pipefail
+          set -euo pipefail
 
-          echo "Runner name: $RUNNER_NAME"
-          echo "Runner OS: $RUNNER_OS"
-          echo "SHA: $GITHUB_SHA"
+          echo "Runner name: ${RUNNER_NAME}"
+          echo "Runner OS: ${RUNNER_OS}"
+          echo "Repository: ${GITHUB_REPOSITORY}"
+          echo "Ref: ${GITHUB_REF}"
+          echo "SHA: ${GITHUB_SHA}"
 
           echo "Checking buildctl..."
           buildctl --version
@@ -52,30 +54,36 @@ jobs:
           echo "Memory:"
           free -h || true
 
-      - name: Prepare Image Tags
+      - name: Prepare Image Metadata
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           SHORT_SHA="${GITHUB_SHA::7}"
-
           IMAGE_SHA="${REGISTRY}/${IMAGE_NAME}:${SHORT_SHA}"
-          IMAGE_LATEST="${REGISTRY}/${IMAGE_NAME}:latest"
 
           echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
           echo "IMAGE_SHA=${IMAGE_SHA}" >> "$GITHUB_ENV"
-          echo "IMAGE_LATEST=${IMAGE_LATEST}" >> "$GITHUB_ENV"
 
-          echo "Image SHA tag: ${IMAGE_SHA}"
-          echo "Image latest tag: ${IMAGE_LATEST}"
+          cat > image-metadata.txt << EOF
+          REGISTRY=${REGISTRY}
+          IMAGE_NAME=${IMAGE_NAME}
+          IMAGE_SHA=${IMAGE_SHA}
+          SHORT_SHA=${SHORT_SHA}
+          GITHUB_SHA=${GITHUB_SHA}
+          GITHUB_REF=${GITHUB_REF}
+          BUILDKIT_HOST=${BUILDKIT_HOST}
+          EOF
+
+          echo "Image tag: ${IMAGE_SHA}"
 
       - name: Configure Harbor Auth
         env:
           HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
         run: |
-          set -o pipefail
+          set -euo pipefail
 
-          if [ -z "$HARBOR_USERNAME" ] || [ -z "$HARBOR_PASSWORD" ]; then
+          if [ -z "${HARBOR_USERNAME:-}" ] || [ -z "${HARBOR_PASSWORD:-}" ]; then
             echo "HARBOR_USERNAME or HARBOR_PASSWORD is empty."
             exit 1
           fi
@@ -101,11 +109,11 @@ jobs:
         env:
           HARBOR_CA_CRT: ${{ secrets.HARBOR_CA_CRT }}
         run: |
-          set -o pipefail
+          set -euo pipefail
 
-          if [ -z "$HARBOR_CA_CRT" ]; then
+          if [ -z "${HARBOR_CA_CRT:-}" ]; then
             echo "HARBOR_CA_CRT is empty or not configured."
-            echo "Skip client-side CA setup."
+            echo "Skipping client-side CA setup because BuildKit image already contains Harbor CA."
             exit 0
           fi
 
@@ -119,11 +127,10 @@ jobs:
 
       - name: Verify Harbor Auth Registry Key
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           echo "REGISTRY=${REGISTRY}"
           echo "IMAGE_SHA=${IMAGE_SHA}"
-          echo "IMAGE_LATEST=${IMAGE_LATEST}"
           echo "DOCKER_CONFIG=${DOCKER_CONFIG:-$HOME/.docker}"
 
           echo "Docker config auth keys:"
@@ -132,7 +139,7 @@ jobs:
           AUTH_KEY="$(jq -r '.auths | keys[0]' "$HOME/.docker/config.json")"
 
           if [ "$AUTH_KEY" != "$REGISTRY" ]; then
-            echo "Registry key mismatch!"
+            echo "Registry key mismatch."
             echo "REGISTRY=${REGISTRY}"
             echo "AUTH_KEY=${AUTH_KEY}"
             exit 1
@@ -157,7 +164,7 @@ jobs:
           HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           echo "Testing Harbor /v2/ auth..."
           STATUS="$(curl -sk -o /tmp/harbor-v2.txt -w "%{http_code}" \
@@ -172,7 +179,7 @@ jobs:
             exit 1
           fi
 
-          echo "Testing Harbor token for push scope..."
+          echo "Testing Harbor token for pull,push scope..."
           TOKEN_STATUS="$(curl -sk -o /tmp/harbor-token.json -w "%{http_code}" \
             -u "${HARBOR_USERNAME}:${HARBOR_PASSWORD}" \
             "https://${REGISTRY}/service/token?service=harbor-registry&scope=repository:${IMAGE_NAME}:pull,push")"
@@ -195,19 +202,18 @@ jobs:
 
       - name: Check Dockerfile
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           test -f Dockerfile
           echo "Dockerfile found."
 
       - name: Build and Push Image with BuildKit
         run: |
-          set -o pipefail
+          set -euo pipefail
 
           echo "BUILDKIT_HOST=${BUILDKIT_HOST}"
           echo "REGISTRY=${REGISTRY}"
           echo "IMAGE_SHA=${IMAGE_SHA}"
-          echo "IMAGE_LATEST=${IMAGE_LATEST}"
           echo "DOCKER_CONFIG=${DOCKER_CONFIG}"
           echo "SSL_CERT_FILE=${SSL_CERT_FILE:-not-set}"
 
@@ -219,6 +225,14 @@ jobs:
             --opt filename=Dockerfile \
             --output type=image,name="${IMAGE_SHA}",push=true
 
+      - name: Upload Image Metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-build-image-metadata
+          path: image-metadata.txt
+          if-no-files-found: warn
+
       - name: Write Build Summary
         if: always()
         run: |
@@ -227,6 +241,7 @@ jobs:
           echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Registry | \`${REGISTRY}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Image SHA | \`${IMAGE_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Image Latest | \`${IMAGE_LATEST}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | \`${IMAGE_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Short SHA | \`${SHORT_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| BuildKit Host | \`${BUILDKIT_HOST}\` |" >> "$GITHUB_STEP_SUMMARY"
+```
