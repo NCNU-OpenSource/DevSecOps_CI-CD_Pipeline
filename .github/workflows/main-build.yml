@@ -347,6 +347,25 @@ jobs:
 
           echo "COSIGN_KEY_PATH=$RUNNER_TEMP/cosign.key" >> "$GITHUB_ENV"
 
+      - name: Configure Cosign Public Key
+        env:
+          COSIGN_PUBLIC_KEY: ${{ secrets.COSIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${COSIGN_PUBLIC_KEY:-}" ]; then
+            echo "COSIGN_PUBLIC_KEY is empty."
+            exit 1
+          fi
+
+          printf "%s\n" "$COSIGN_PUBLIC_KEY" > "$RUNNER_TEMP/cosign.pub"
+          chmod 644 "$RUNNER_TEMP/cosign.pub"
+
+          echo "COSIGN_PUBLIC_KEY_PATH=$RUNNER_TEMP/cosign.pub" >> "$GITHUB_ENV"
+
+          echo "Cosign public key configured."
+          grep "BEGIN PUBLIC KEY" "$RUNNER_TEMP/cosign.pub"
+      
       - name: Sign Image with Cosign
         env:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
@@ -376,8 +395,10 @@ jobs:
           echo "${IMAGE_SHA}"
 
           cosign verify \
-            --key "$RUNNER_TEMP/cosign.pub" \
-            "${IMAGE_SHA}" || true
+            --key "${COSIGN_PUBLIC_KEY_PATH}" \
+            "${IMAGE_SHA}"
+
+          echo "Image signature verified successfully."
           
       - name: Upload Main Build Artifacts
         if: always()
