@@ -73,21 +73,17 @@ jobs:
 
           "$RUNNER_TEMP/bin/kubectl" version --client
 
-      - name: Configure Kubernetes In-Cluster Auth
+      - name: Configure Kubernetes Auth
+        env:
+          K8S_ARC_RUNNER_TOKEN: ${{ secrets.K8S_ARC_RUNNER_TOKEN }}
         run: |
           set -euo pipefail
 
           SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
-          TOKEN_FILE="${SA_DIR}/token"
           CA_FILE="${SA_DIR}/ca.crt"
-          NAMESPACE_FILE="${SA_DIR}/namespace"
 
-          echo "Checking ServiceAccount mount..."
-          ls -l "${SA_DIR}" || true
-
-          if [ ! -f "${TOKEN_FILE}" ]; then
-            echo "ServiceAccount token not found: ${TOKEN_FILE}"
-            echo "The runner pod may not have automountServiceAccountToken enabled."
+          if [ -z "${K8S_ARC_RUNNER_TOKEN:-}" ]; then
+            echo "K8S_ARC_RUNNER_TOKEN is empty."
             exit 1
           fi
 
@@ -95,15 +91,6 @@ jobs:
             echo "Kubernetes CA file not found: ${CA_FILE}"
             exit 1
           fi
-
-          echo "ServiceAccount namespace:"
-          cat "${NAMESPACE_FILE}" || true
-
-          echo "Token size:"
-          wc -c "${TOKEN_FILE}"
-
-          echo "CA size:"
-          wc -c "${CA_FILE}"
 
           KUBE_SERVER="https://kubernetes.default.svc"
 
@@ -113,16 +100,13 @@ jobs:
             --embed-certs=true
 
           kubectl config set-credentials arc-runner \
-            --token="$(tr -d '\n' < "${TOKEN_FILE}")"
+            --token="${K8S_ARC_RUNNER_TOKEN}"
 
           kubectl config set-context in-cluster \
             --cluster=in-cluster \
             --user=arc-runner
 
           kubectl config use-context in-cluster
-
-          echo "Current kubectl config:"
-          kubectl config view --minify --raw
 
           echo "Testing Kubernetes API access..."
           kubectl get --raw=/version
