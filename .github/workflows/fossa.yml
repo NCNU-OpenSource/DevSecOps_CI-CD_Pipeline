@@ -48,10 +48,11 @@ jobs:
 
           echo "FOSSA_API_KEY is configured."
 
-      - name: FOSSA Analyze
+      - name: FOSSA Analyze and Test
         uses: fossas/fossa-action@v1.9.0
         with:
           api-key: ${{ secrets.FOSSA_API_KEY }}
+          run-tests: true
 
       - name: Write FOSSA Summary
         if: always()
