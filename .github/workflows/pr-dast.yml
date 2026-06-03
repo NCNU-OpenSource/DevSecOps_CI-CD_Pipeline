@@ -1,0 +1,522 @@
+name: PR DAST
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+concurrency:
+  group: pr-dast-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  REGISTRY: harbor.jlsa.local:30443
+  IMAGE_NAME: ci/youtube-music-bot
+  APP_NAME: youtube-music-bot
+  APP_PORT: "3000"
+
+  BUILDKIT_HOST: tcp://buildkitd.ci-build.svc.cluster.local:1234
+  DOCKER_CONFIG: /home/runner/.docker
+
+  ZAP_IMAGE: harbor.jlsa.local:30443/ci/zap-stable:stable
+  PR_DAST_FAIL_ON_WARN: "true"
+
+jobs:
+  pr-dast:
+    name: PR Preview DAST
+    runs-on: arc-runner-set
+    timeout-minutes: 30
+
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout PR Code
+        uses: actions/checkout@v4
+
+      - name: Resolve PR Variables
+        run: |
+          set -euo pipefail
+
+          PR_NUMBER="${{ github.event.pull_request.number || github.run_number }}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+
+          PR_NAMESPACE="pr-${PR_NUMBER}-youtube-music-bot"
+          PR_IMAGE_TAG="pr-${PR_NUMBER}-${SHORT_SHA}"
+          PR_IMAGE="${REGISTRY}/${IMAGE_NAME}:${PR_IMAGE_TAG}"
+
+          echo "PR_NUMBER=${PR_NUMBER}" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "PR_NAMESPACE=${PR_NAMESPACE}" >> "$GITHUB_ENV"
+          echo "PR_IMAGE_TAG=${PR_IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo "PR_IMAGE=${PR_IMAGE}" >> "$GITHUB_ENV"
+
+          echo "PR namespace: ${PR_NAMESPACE}"
+          echo "PR image: ${PR_IMAGE}"
+
+      - name: Install kubectl
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/bin"
+
+          KUBECTL_VERSION="v1.30.14"
+
+          echo "Installing kubectl ${KUBECTL_VERSION}"
+
+          curl -L --fail --retry 3 \
+            -o "$RUNNER_TEMP/bin/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+
+          chmod +x "$RUNNER_TEMP/bin/kubectl"
+
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+          "$RUNNER_TEMP/bin/kubectl" version --client
+
+      - name: Configure Kubernetes Auth
+        env:
+          K8S_KUBECONFIG_B64: ${{ secrets.K8S_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${K8S_KUBECONFIG_B64:-}" ]; then
+            echo "K8S_KUBECONFIG_B64 is empty."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/kube"
+
+          printf "%s" "$K8S_KUBECONFIG_B64" \
+            | base64 -d > "$RUNNER_TEMP/kube/config"
+
+          chmod 600 "$RUNNER_TEMP/kube/config"
+
+          echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+          export KUBECONFIG="$RUNNER_TEMP/kube/config"
+
+          echo "Testing Kubernetes API access..."
+          kubectl get --raw=/version
+
+          echo "Current context:"
+          kubectl config current-context
+
+      - name: Configure Harbor Client Auth
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          HARBOR_CA_CRT: ${{ secrets.HARBOR_CA_CRT }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${HARBOR_USERNAME:-}" ] || [ -z "${HARBOR_PASSWORD:-}" ]; then
+            echo "HARBOR_USERNAME or HARBOR_PASSWORD is empty."
+            exit 1
+          fi
+
+          mkdir -p "${DOCKER_CONFIG}"
+
+          AUTH_B64="$(printf "%s:%s" "${HARBOR_USERNAME}" "${HARBOR_PASSWORD}" | base64 -w 0)"
+
+          cat > "${DOCKER_CONFIG}/config.json" << JSON
+          {
+            "auths": {
+              "${REGISTRY}": {
+                "auth": "${AUTH_B64}",
+                "username": "${HARBOR_USERNAME}",
+                "password": "${HARBOR_PASSWORD}"
+              }
+            }
+          }
+          JSON
+
+          chmod 600 "${DOCKER_CONFIG}/config.json"
+
+          if [ -n "${HARBOR_CA_CRT:-}" ]; then
+            mkdir -p "$RUNNER_TEMP/certs"
+            printf "%s\n" "$HARBOR_CA_CRT" > "$RUNNER_TEMP/certs/harbor-ca.crt"
+            echo "SSL_CERT_FILE=$RUNNER_TEMP/certs/harbor-ca.crt" >> "$GITHUB_ENV"
+            echo "Harbor CA configured."
+          else
+            echo "HARBOR_CA_CRT is empty. Skipping client-side CA setup."
+          fi
+
+      - name: Build and Push PR Image
+        run: |
+          set -euo pipefail
+
+          echo "BUILDKIT_HOST=${BUILDKIT_HOST}"
+          echo "PR_IMAGE=${PR_IMAGE}"
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}"
+          echo "SSL_CERT_FILE=${SSL_CERT_FILE:-not-set}"
+
+          buildctl --addr "${BUILDKIT_HOST}" build \
+            --progress=plain \
+            --frontend dockerfile.v0 \
+            --local context=. \
+            --local dockerfile=. \
+            --opt filename=Dockerfile \
+            --metadata-file buildkit-image-metadata.json \
+            --output type=image,name="${PR_IMAGE}",push=true
+
+          echo "BuildKit metadata:"
+          cat buildkit-image-metadata.json
+
+          IMAGE_DIGEST_VALUE="$(python3 - << 'PY'
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("buildkit-image-metadata.json").read_text())
+          print(data.get("containerimage.digest", ""))
+          PY
+          )"
+
+          if [ -z "${IMAGE_DIGEST_VALUE}" ]; then
+            echo "Failed to resolve image digest from BuildKit metadata."
+            exit 1
+          fi
+
+          PR_IMAGE_DIGEST="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST_VALUE}"
+
+          echo "IMAGE_DIGEST_VALUE=${IMAGE_DIGEST_VALUE}" >> "$GITHUB_ENV"
+          echo "PR_IMAGE_DIGEST=${PR_IMAGE_DIGEST}" >> "$GITHUB_ENV"
+
+          echo "PR image digest:"
+          echo "${PR_IMAGE_DIGEST}"
+
+      - name: Deploy PR Preview Environment
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          echo "Deploying PR preview namespace: ${PR_NAMESPACE}"
+          echo "Deploying image: ${PR_IMAGE_DIGEST}"
+
+          kubectl delete namespace "${PR_NAMESPACE}" \
+            --ignore-not-found \
+            --wait=true || true
+
+          kubectl create namespace "${PR_NAMESPACE}"
+
+          kubectl create secret docker-registry harbor-registry-secret \
+            -n "${PR_NAMESPACE}" \
+            --docker-server="${REGISTRY}" \
+            --docker-username="${HARBOR_USERNAME}" \
+            --docker-password="${HARBOR_PASSWORD}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          cat << EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${APP_NAME}
+            namespace: ${PR_NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: pr-preview
+              pr-number: "${PR_NUMBER}"
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: ${APP_NAME}
+            template:
+              metadata:
+                labels:
+                  app: ${APP_NAME}
+                  environment: pr-preview
+                  pr-number: "${PR_NUMBER}"
+              spec:
+                nodeSelector:
+                  kubernetes.io/hostname: node2
+                imagePullSecrets:
+                  - name: harbor-registry-secret
+                containers:
+                  - name: app
+                    image: ${PR_IMAGE_DIGEST}
+                    ports:
+                      - containerPort: ${APP_PORT}
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: ${APP_PORT}
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                      failureThreshold: 6
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: ${APP_PORT}
+                      initialDelaySeconds: 20
+                      periodSeconds: 20
+                      failureThreshold: 3
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${APP_NAME}
+            namespace: ${PR_NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: pr-preview
+              pr-number: "${PR_NUMBER}"
+          spec:
+            type: ClusterIP
+            selector:
+              app: ${APP_NAME}
+            ports:
+              - name: http
+                port: ${APP_PORT}
+                targetPort: ${APP_PORT}
+          EOF
+
+          kubectl rollout status deployment/${APP_NAME} \
+            -n "${PR_NAMESPACE}" \
+            --timeout=180s
+
+          kubectl get pods -n "${PR_NAMESPACE}" -o wide
+          kubectl get svc -n "${PR_NAMESPACE}"
+
+      - name: Smoke Test PR Preview
+        run: |
+          set -euo pipefail
+
+          PR_PREVIEW_URL="http://${APP_NAME}.${PR_NAMESPACE}.svc.cluster.local:${APP_PORT}"
+
+          echo "Testing PR preview service:"
+          echo "${PR_PREVIEW_URL}"
+
+          for i in $(seq 1 30); do
+            if curl -fsS "${PR_PREVIEW_URL}" > /tmp/pr-preview-response.html; then
+              echo "PR preview smoke test passed."
+              head -20 /tmp/pr-preview-response.html || true
+              exit 0
+            fi
+
+            echo "Waiting for PR preview service... ${i}"
+            sleep 5
+          done
+
+          echo "PR preview smoke test failed."
+          kubectl get pods -n "${PR_NAMESPACE}" -o wide
+          kubectl describe deployment "${APP_NAME}" -n "${PR_NAMESPACE}"
+          exit 1
+
+      - name: Run OWASP ZAP PR DAST
+        run: |
+          set -euo pipefail
+
+          ZAP_JOB="zap-pr-baseline"
+          PR_DAST_TARGET_URL="http://${APP_NAME}.${PR_NAMESPACE}.svc.cluster.local:${APP_PORT}"
+
+          echo "Running OWASP ZAP against PR preview:"
+          echo "${PR_DAST_TARGET_URL}"
+          echo "ZAP image: ${ZAP_IMAGE}"
+          echo "PR_DAST_FAIL_ON_WARN=${PR_DAST_FAIL_ON_WARN}"
+
+          kubectl delete job "${ZAP_JOB}" \
+            -n "${PR_NAMESPACE}" \
+            --ignore-not-found \
+            --wait=false || true
+
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ${ZAP_JOB}
+            namespace: ${PR_NAMESPACE}
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                imagePullSecrets:
+                  - name: harbor-registry-secret
+                containers:
+                  - name: zap
+                    image: ${ZAP_IMAGE}
+                    command:
+                      - /bin/sh
+                      - -c
+                    args:
+                      - |
+                        set +e
+                        cd /zap/wrk
+
+                        zap-baseline.py \
+                          -t "${PR_DAST_TARGET_URL}" \
+                          -J zap-pr-report.json \
+                          -r zap-pr-report.html \
+                          -w zap-pr-report.md
+
+                        ZAP_STATUS=\$?
+                        echo "\${ZAP_STATUS}" > /zap/wrk/zap-pr-exit-code.txt
+                        echo "ZAP PR scan finished with exit code: \${ZAP_STATUS}"
+                        echo "Keeping container alive for artifact copy..."
+                        sleep 300
+                        exit 0
+                    volumeMounts:
+                      - name: zap-work
+                        mountPath: /zap/wrk
+                volumes:
+                  - name: zap-work
+                    emptyDir: {}
+          EOF
+
+          echo "Waiting for ZAP pod..."
+
+          ZAP_POD=""
+          for i in $(seq 1 60); do
+            ZAP_POD="$(kubectl get pod -n "${PR_NAMESPACE}" \
+              -l job-name="${ZAP_JOB}" \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+
+            if [ -n "${ZAP_POD}" ]; then
+              PHASE="$(kubectl get pod -n "${PR_NAMESPACE}" "${ZAP_POD}" -o jsonpath='{.status.phase}' || true)"
+              echo "ZAP pod phase: ${PHASE}"
+
+              if [ "${PHASE}" = "Running" ]; then
+                break
+              fi
+            fi
+
+            sleep 5
+          done
+
+          if [ -z "${ZAP_POD}" ]; then
+            echo "Failed to find ZAP pod."
+            kubectl get pods -n "${PR_NAMESPACE}" -o wide
+            exit 1
+          fi
+
+          echo "ZAP pod: ${ZAP_POD}"
+
+          echo "Waiting for ZAP scan output files..."
+
+          SCAN_DONE="false"
+          for i in $(seq 1 120); do
+            if kubectl exec -n "${PR_NAMESPACE}" "${ZAP_POD}" -- test -f /zap/wrk/zap-pr-exit-code.txt; then
+              echo "ZAP PR scan completed."
+              SCAN_DONE="true"
+              break
+            fi
+
+            echo "ZAP PR scan still running... ${i}"
+            sleep 5
+          done
+
+          if [ "${SCAN_DONE}" != "true" ]; then
+            echo "ZAP PR scan did not finish in time."
+            kubectl logs -n "${PR_NAMESPACE}" "${ZAP_POD}" || true
+            exit 1
+          fi
+
+          kubectl logs -n "${PR_NAMESPACE}" "${ZAP_POD}" | tee zap-pr-console.log
+
+          kubectl cp \
+            "${PR_NAMESPACE}/${ZAP_POD}:/zap/wrk/zap-pr-report.json" \
+            "zap-pr-report-${SHORT_SHA}.json" || true
+
+          kubectl cp \
+            "${PR_NAMESPACE}/${ZAP_POD}:/zap/wrk/zap-pr-report.html" \
+            "zap-pr-report-${SHORT_SHA}.html" || true
+
+          kubectl cp \
+            "${PR_NAMESPACE}/${ZAP_POD}:/zap/wrk/zap-pr-report.md" \
+            "zap-pr-report-${SHORT_SHA}.md" || true
+
+          kubectl cp \
+            "${PR_NAMESPACE}/${ZAP_POD}:/zap/wrk/zap-pr-exit-code.txt" \
+            "zap-pr-exit-code-${SHORT_SHA}.txt" || true
+
+          ls -lh zap-pr-* || true
+
+          FAIL_NEW="$( (grep -Eo 'FAIL-NEW: [0-9]+' zap-pr-console.log || true) | tail -1 | awk '{print $2}' )"
+          WARN_NEW="$( (grep -Eo 'WARN-NEW: [0-9]+' zap-pr-console.log || true) | tail -1 | awk '{print $2}' )"
+
+          FAIL_NEW="${FAIL_NEW:-0}"
+          WARN_NEW="${WARN_NEW:-0}"
+
+          echo "ZAP PR FAIL-NEW=${FAIL_NEW}"
+          echo "ZAP PR WARN-NEW=${WARN_NEW}"
+
+          if ! grep -q 'FAIL-NEW:' zap-pr-console.log; then
+            echo "ZAP summary was not found in console log."
+            echo "Treating PR DAST as failed."
+            exit 1
+          fi
+
+          if [ "${FAIL_NEW}" != "0" ]; then
+            echo "OWASP ZAP PR scan found FAIL issues."
+            echo "PR DAST gate failed."
+            exit 1
+          fi
+
+          if [ "${WARN_NEW}" != "0" ]; then
+            echo "OWASP ZAP PR scan found WARN issues."
+            echo "PR_DAST_FAIL_ON_WARN=${PR_DAST_FAIL_ON_WARN}"
+
+            if [ "${PR_DAST_FAIL_ON_WARN}" = "true" ]; then
+              echo "PR DAST gate failed because WARN-NEW must be 0."
+              exit 1
+            fi
+
+            echo "WARN issues are currently non-blocking."
+          fi
+
+          echo "OWASP ZAP PR DAST passed."
+
+      - name: Upload PR DAST Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-dast-artifacts-${{ github.event.pull_request.number || github.run_id }}
+          path: |
+            zap-pr-console.log
+            zap-pr-report-*.json
+            zap-pr-report-*.html
+            zap-pr-report-*.md
+            zap-pr-exit-code-*.txt
+            buildkit-image-metadata.json
+          if-no-files-found: warn
+
+      - name: Cleanup PR Preview Environment
+        if: always()
+        run: |
+          set -euo pipefail
+
+          if [ -n "${PR_NAMESPACE:-}" ]; then
+            echo "Cleaning up namespace: ${PR_NAMESPACE}"
+            kubectl delete namespace "${PR_NAMESPACE}" \
+              --ignore-not-found \
+              --wait=false || true
+          fi
+
+      - name: Write PR DAST Summary
+        if: always()
+        run: |
+          echo "## PR DAST Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| PR Number | \`${PR_NUMBER:-unknown}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Namespace | \`${PR_NAMESPACE:-unknown}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| PR Image | \`${PR_IMAGE_DIGEST:-not-built}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Target URL | \`http://${APP_NAME}.${PR_NAMESPACE:-unknown}.svc.cluster.local:${APP_PORT}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ZAP Image | \`${ZAP_IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Fail on WARN | \`${PR_DAST_FAIL_ON_WARN}\` |" >> "$GITHUB_STEP_SUMMARY"
