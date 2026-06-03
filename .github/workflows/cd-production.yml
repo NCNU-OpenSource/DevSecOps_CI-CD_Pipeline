@@ -27,9 +27,16 @@ env:
   PRODUCTION_NAMESPACE: production-youtube-music-bot
   PRODUCTION_NODE_PORT: "31080"
 
+  ARGOCD_NAMESPACE: argocd
+  ARGOCD_PRODUCTION_APP: youtube-music-bot-production
+
+  GITOPS_REPO_BRANCH: main
+  GITOPS_STAGING_PATH: apps/youtube-music-bot/overlays/staging
+  GITOPS_PRODUCTION_PATH: apps/youtube-music-bot/overlays/production
+
 jobs:
   deploy-production:
-    name: Deploy to VM3 Production
+    name: Promote GitOps Production
     runs-on: arc-runner-set
     timeout-minutes: 20
     environment: production
@@ -104,165 +111,179 @@ jobs:
 
           echo "node3 label OK: dedicated=production-storage"
 
-      - name: Resolve Image Digest from Staging
+      - name: Update GitOps Production Digest
+        env:
+          GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
         run: |
           set -euo pipefail
 
-          echo "Reading image digest from staging deployment..."
-
-          kubectl get deployment "${APP_NAME}" \
-            -n "${STAGING_NAMESPACE}" \
-            -o yaml
-
-          IMAGE_DIGEST="$(kubectl get deployment "${APP_NAME}" \
-            -n "${STAGING_NAMESPACE}" \
-            -o jsonpath='{.spec.template.spec.containers[0].image}')"
-
-          if [ -z "${IMAGE_DIGEST}" ]; then
-            echo "Failed to resolve IMAGE_DIGEST from staging deployment."
+          if [ -z "${GITOPS_REPO_TOKEN:-}" ]; then
+            echo "GITOPS_REPO_TOKEN is empty."
             exit 1
           fi
 
-          case "${IMAGE_DIGEST}" in
-            ${REGISTRY}/${IMAGE_NAME}@sha256:*)
-              echo "Image digest format OK."
+          GITOPS_DIR="$RUNNER_TEMP/gitops"
+
+          echo "Cloning GitOps repo..."
+          git clone \
+            --branch "${GITOPS_REPO_BRANCH}" \
+            "https://x-access-token:${GITOPS_REPO_TOKEN}@github.com/Julie08080808/youtube-music-bot-gitops.git" \
+            "${GITOPS_DIR}"
+
+          cd "${GITOPS_DIR}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          STAGING_KUSTOMIZATION="${GITOPS_STAGING_PATH}/kustomization.yaml"
+          PRODUCTION_KUSTOMIZATION="${GITOPS_PRODUCTION_PATH}/kustomization.yaml"
+
+          if [ ! -f "${STAGING_KUSTOMIZATION}" ]; then
+            echo "Staging kustomization not found: ${STAGING_KUSTOMIZATION}"
+            exit 1
+          fi
+
+          if [ ! -f "${PRODUCTION_KUSTOMIZATION}" ]; then
+            echo "Production kustomization not found: ${PRODUCTION_KUSTOMIZATION}"
+            exit 1
+          fi
+
+          STAGING_DIGEST="$(grep -A2 'name: harbor.jlsa.local:30443/ci/youtube-music-bot' "${STAGING_KUSTOMIZATION}" \
+            | grep 'digest:' \
+            | awk '{print $2}')"
+
+          if [ -z "${STAGING_DIGEST}" ]; then
+            echo "Failed to resolve staging digest from GitOps repo."
+            exit 1
+          fi
+
+          case "${STAGING_DIGEST}" in
+            sha256:*)
+              echo "Staging digest format OK."
               ;;
             *)
-              echo "Production must deploy by digest, not tag."
-              echo "IMAGE_DIGEST=${IMAGE_DIGEST}"
+              echo "Invalid staging digest format: ${STAGING_DIGEST}"
               exit 1
               ;;
           esac
 
-          echo "IMAGE_DIGEST=${IMAGE_DIGEST}" >> "$GITHUB_ENV"
+          PRODUCTION_IMAGE="${REGISTRY}/${IMAGE_NAME}@${STAGING_DIGEST}"
 
-          echo "Production will deploy the same image as staging:"
-          echo "${IMAGE_DIGEST}"
+          echo "STAGING_DIGEST=${STAGING_DIGEST}" >> "$GITHUB_ENV"
+          echo "PRODUCTION_IMAGE=${PRODUCTION_IMAGE}" >> "$GITHUB_ENV"
 
-      - name: Check NodePort Availability
-        run: |
-          set -euo pipefail
+          echo "Promoting staging digest to production:"
+          echo "${STAGING_DIGEST}"
 
-          echo "Checking whether NodePort ${PRODUCTION_NODE_PORT} is already used..."
+          echo "Before production update:"
+          cat "${PRODUCTION_KUSTOMIZATION}"
 
-          USED_BY="$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{range .spec.ports[*]}{.nodePort}{" "}{end}{"\n"}{end}' \
-            | awk -v port="${PRODUCTION_NODE_PORT}" '$0 ~ port {print $1 "/" $2}' || true)"
+          GITOPS_KUSTOMIZATION="${PRODUCTION_KUSTOMIZATION}" python3 - << 'PY'
+          import os
+          import re
+          from pathlib import Path
 
-          if [ -n "${USED_BY}" ]; then
-            echo "NodePort ${PRODUCTION_NODE_PORT} is used by:"
-            echo "${USED_BY}"
+          path = Path(os.environ["GITOPS_KUSTOMIZATION"])
+          digest = os.environ["STAGING_DIGEST"]
 
-            if echo "${USED_BY}" | grep -qx "${PRODUCTION_NAMESPACE}/${APP_NAME}"; then
-              echo "NodePort is already used by the same production service. OK."
-            else
-              echo "NodePort ${PRODUCTION_NODE_PORT} is used by another service."
-              exit 1
-            fi
-          else
-            echo "NodePort ${PRODUCTION_NODE_PORT} is available."
+          text = path.read_text()
+
+          new_text, count = re.subn(
+              r'(^\s*digest:\s*).+$',
+              r'\1' + digest,
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+
+          if count != 1:
+              raise SystemExit("Failed to update digest line in production kustomization.yaml")
+
+          path.write_text(new_text)
+          PY
+
+          echo "After production update:"
+          cat "${PRODUCTION_KUSTOMIZATION}"
+
+          git status --short
+
+          if git diff --quiet; then
+            echo "GitOps production digest already up to date."
+            exit 0
           fi
 
-      - name: Deploy Production to VM3
-        env:
-          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
-          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          git add "${PRODUCTION_KUSTOMIZATION}"
+          git commit -m "gitops: promote staging digest to production"
+          git push origin "${GITOPS_REPO_BRANCH}"
+
+          echo "GitOps production digest updated."
+
+      - name: Wait for Argo CD Production Sync
         run: |
           set -euo pipefail
 
-          if [ -z "${HARBOR_USERNAME:-}" ] || [ -z "${HARBOR_PASSWORD:-}" ]; then
-            echo "HARBOR_USERNAME or HARBOR_PASSWORD is empty."
+          echo "Requesting Argo CD hard refresh..."
+
+          kubectl annotate application "${ARGOCD_PRODUCTION_APP}" \
+            -n "${ARGOCD_NAMESPACE}" \
+            argocd.argoproj.io/refresh=hard \
+            --overwrite
+
+          echo "Waiting for Argo CD production app to become Synced and Healthy..."
+
+          for i in $(seq 1 90); do
+            SYNC_STATUS="$(kubectl get application "${ARGOCD_PRODUCTION_APP}" \
+              -n "${ARGOCD_NAMESPACE}" \
+              -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+
+            HEALTH_STATUS="$(kubectl get application "${ARGOCD_PRODUCTION_APP}" \
+              -n "${ARGOCD_NAMESPACE}" \
+              -o jsonpath='{.status.health.status}' 2>/dev/null || true)"
+
+            echo "Attempt ${i}: sync=${SYNC_STATUS:-unknown}, health=${HEALTH_STATUS:-unknown}"
+
+            if [ "${SYNC_STATUS}" = "Synced" ] && [ "${HEALTH_STATUS}" = "Healthy" ]; then
+              echo "Argo CD production app is Synced and Healthy."
+              break
+            fi
+
+            sleep 5
+          done
+
+          SYNC_STATUS="$(kubectl get application "${ARGOCD_PRODUCTION_APP}" \
+            -n "${ARGOCD_NAMESPACE}" \
+            -o jsonpath='{.status.sync.status}')"
+
+          HEALTH_STATUS="$(kubectl get application "${ARGOCD_PRODUCTION_APP}" \
+            -n "${ARGOCD_NAMESPACE}" \
+            -o jsonpath='{.status.health.status}')"
+
+          if [ "${SYNC_STATUS}" != "Synced" ] || [ "${HEALTH_STATUS}" != "Healthy" ]; then
+            echo "Argo CD production app did not become Synced and Healthy."
+            kubectl describe application "${ARGOCD_PRODUCTION_APP}" -n "${ARGOCD_NAMESPACE}"
             exit 1
           fi
 
-          echo "Deploying image to VM3 production:"
-          echo "${IMAGE_DIGEST}"
+      - name: Verify Production Deployment
+        run: |
+          set -euo pipefail
 
-          kubectl create namespace "${PRODUCTION_NAMESPACE}" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-          kubectl create secret docker-registry harbor-registry-secret \
-            -n "${PRODUCTION_NAMESPACE}" \
-            --docker-server="${REGISTRY}" \
-            --docker-username="${HARBOR_USERNAME}" \
-            --docker-password="${HARBOR_PASSWORD}" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-          cat << EOF | kubectl apply -f -
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: ${APP_NAME}
-            namespace: ${PRODUCTION_NAMESPACE}
-            labels:
-              app: ${APP_NAME}
-              environment: production
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: ${APP_NAME}
-            template:
-              metadata:
-                labels:
-                  app: ${APP_NAME}
-                  environment: production
-                annotations:
-                  jlsa.dev/image-digest: "${IMAGE_DIGEST}"
-              spec:
-                nodeSelector:
-                  dedicated: production-storage
-                imagePullSecrets:
-                  - name: harbor-registry-secret
-                containers:
-                  - name: app
-                    image: ${IMAGE_DIGEST}
-                    ports:
-                      - containerPort: ${APP_PORT}
-                    readinessProbe:
-                      httpGet:
-                        path: /
-                        port: ${APP_PORT}
-                      initialDelaySeconds: 5
-                      periodSeconds: 10
-                      failureThreshold: 6
-                    livenessProbe:
-                      httpGet:
-                        path: /
-                        port: ${APP_PORT}
-                      initialDelaySeconds: 20
-                      periodSeconds: 20
-                      failureThreshold: 3
-          ---
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: ${APP_NAME}
-            namespace: ${PRODUCTION_NAMESPACE}
-            labels:
-              app: ${APP_NAME}
-              environment: production
-          spec:
-            type: NodePort
-            selector:
-              app: ${APP_NAME}
-            ports:
-              - name: http
-                port: ${APP_PORT}
-                targetPort: ${APP_PORT}
-                nodePort: ${PRODUCTION_NODE_PORT}
-          EOF
-
+          echo "Waiting for production rollout..."
           kubectl rollout status deployment/${APP_NAME} \
             -n "${PRODUCTION_NAMESPACE}" \
             --timeout=180s
 
-          echo "Production resources:"
-          kubectl get pods -n "${PRODUCTION_NAMESPACE}" -o wide
-          kubectl get svc -n "${PRODUCTION_NAMESPACE}"
+          LIVE_IMAGE="$(kubectl get deployment "${APP_NAME}" \
+            -n "${PRODUCTION_NAMESPACE}" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')"
 
-      - name: Verify Production Pod Runs on VM3
-        run: |
-          set -euo pipefail
+          echo "Expected image: ${PRODUCTION_IMAGE}"
+          echo "Live image:     ${LIVE_IMAGE}"
+
+          if [ "${LIVE_IMAGE}" != "${PRODUCTION_IMAGE}" ]; then
+            echo "Production live image does not match expected image."
+            exit 1
+          fi
 
           POD_NODE="$(kubectl get pod -n "${PRODUCTION_NAMESPACE}" \
             -l app="${APP_NAME}" \
@@ -275,7 +296,8 @@ jobs:
             exit 1
           fi
 
-          echo "Production pod is running on VM3/node3."
+          kubectl get pods -n "${PRODUCTION_NAMESPACE}" -o wide
+          kubectl get svc -n "${PRODUCTION_NAMESPACE}"
 
       - name: Smoke Test Production
         run: |
@@ -305,13 +327,15 @@ jobs:
       - name: Write Production Summary
         if: always()
         run: |
-          echo "## CD Production Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "## GitOps CD Production Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Namespace | \`${PRODUCTION_NAMESPACE}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| App | \`${APP_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Image Digest | \`${IMAGE_DIGEST:-not-resolved}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image | \`${PRODUCTION_IMAGE:-not-resolved}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Argo CD App | \`${ARGOCD_PRODUCTION_APP}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GitOps Path | \`${GITOPS_PRODUCTION_PATH}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Node Selector | \`dedicated=production-storage\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Expected Node | \`node3\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Cluster URL | \`http://${APP_NAME}.${PRODUCTION_NAMESPACE}.svc.cluster.local:${APP_PORT}\` |" >> "$GITHUB_STEP_SUMMARY"
