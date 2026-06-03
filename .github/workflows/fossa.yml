@@ -28,7 +28,6 @@ jobs:
     runs-on: arc-runner-set
     timeout-minutes: 20
 
-    # fork PR 不跑，避免 secrets 外洩。
     if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
 
     steps:
@@ -57,7 +56,6 @@ jobs:
           run-tests: true
           test-diff-revision: ${{ github.event.pull_request.base.sha }}
           project: youtube-music-bot
-          branch: ${{ github.head_ref }}
 
       - name: FOSSA Analyze and Test Main
         if: ${{ github.event_name != 'pull_request' }}
@@ -66,7 +64,6 @@ jobs:
           api-key: ${{ secrets.FOSSA_API_KEY }}
           run-tests: true
           project: youtube-music-bot
-          branch: ${{ github.ref_name }}
 
       - name: Write FOSSA Summary
         if: always()
