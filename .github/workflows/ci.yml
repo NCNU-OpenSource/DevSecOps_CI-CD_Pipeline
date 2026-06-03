@@ -28,7 +28,6 @@ jobs:
       biome: ${{ steps.static-results.outputs.biome }}
       tsc: ${{ steps.static-results.outputs.tsc }}
       semgrep: ${{ steps.static-results.outputs.semgrep }}
-      semgrep_status: ${{ steps.static-results.outputs.semgrep_status }}
 
     defaults:
       run:
@@ -153,8 +152,7 @@ jobs:
           echo "biome=${{ steps.biome.outcome }}" >> "$GITHUB_OUTPUT"
           echo "tsc=${{ steps.tsc.outcome }}" >> "$GITHUB_OUTPUT"
           echo "semgrep=${{ steps.semgrep.outcome }}" >> "$GITHUB_OUTPUT"
-          echo "semgrep_status=${{ steps.semgrep.outputs.status || 'unknown' }}" >> "$GITHUB_OUTPUT"
-
+          
       - name: Upload Static Analysis Reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -284,7 +282,6 @@ jobs:
           echo "| Biome | ${{ needs.static-analysis.outputs.biome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| TypeScript | ${{ needs.static-analysis.outputs.tsc }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Semgrep | ${{ needs.static-analysis.outputs.semgrep }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Semgrep Status | ${{ needs.static-analysis.outputs.semgrep_status }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Build | ${{ needs.build-check.outputs.build }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Hadolint | ${{ needs.build-check.outputs.hadolint }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -292,7 +289,7 @@ jobs:
           echo "ENFORCE_CI_GATE=${ENFORCE_CI_GATE}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce CI Gate
-        if: env.ENFORCE_CI_GATE == 'true' && (needs.static-analysis.outputs.biome != 'success' || needs.static-analysis.outputs.tsc != 'success' || needs.static-analysis.outputs.semgrep != 'success' || needs.static-analysis.outputs.semgrep_status != 'success' || needs.build-check.outputs.build != 'success' || needs.build-check.outputs.hadolint != 'success')
+        if: env.ENFORCE_CI_GATE == 'true' && (needs.static-analysis.outputs.biome != 'success' || needs.static-analysis.outputs.tsc != 'success' || needs.static-analysis.outputs.semgrep != 'success' || needs.build-check.outputs.build != 'success' || needs.build-check.outputs.hadolint != 'success')
         run: |
           echo "One or more required CI checks failed."
           exit 1
