@@ -1,0 +1,82 @@
+name: FOSSA
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: fossa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  fossa:
+    name: License and Supply Chain Gate
+    runs-on: arc-runner-set
+    timeout-minutes: 20
+
+    # fork PR 不跑，避免 secrets 外洩。
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft == false) }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Check FOSSA API Key
+        env:
+          FOSSA_API_KEY: ${{ secrets.FOSSA_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${FOSSA_API_KEY:-}" ]; then
+            echo "FOSSA_API_KEY is empty."
+            echo "Please add FOSSA_API_KEY to GitHub Actions secrets."
+            exit 1
+          fi
+
+          echo "FOSSA_API_KEY is configured."
+
+      - name: FOSSA Analyze and Test PR Diff
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: fossas/fossa-action@v1.9.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          run-tests: true
+          test-diff-revision: ${{ github.event.pull_request.base.sha }}
+          project: youtube-music-bot
+          branch: ${{ github.head_ref }}
+
+      - name: FOSSA Analyze and Test Main
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: fossas/fossa-action@v1.9.0
+        with:
+          api-key: ${{ secrets.FOSSA_API_KEY }}
+          run-tests: true
+          project: youtube-music-bot
+          branch: ${{ github.ref_name }}
+
+      - name: Write FOSSA Summary
+        if: always()
+        run: |
+          echo "## FOSSA Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Purpose | \`License / supply chain gate\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Project | \`youtube-music-bot\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Event | \`${{ github.event_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | \`${{ github.head_ref || github.ref_name }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Blocks PR | \`true\` |" >> "$GITHUB_STEP_SUMMARY"
