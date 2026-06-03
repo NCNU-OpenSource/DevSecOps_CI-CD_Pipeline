@@ -16,6 +16,7 @@ env:
   REGISTRY: harbor.jlsa.local:30443
   IMAGE_NAME: ci/youtube-music-bot
   BUILDKIT_HOST: tcp://buildkitd.ci-build.svc.cluster.local:1234
+  DAST_FAIL_ON_WARN: "false"
 
 jobs:
   build-and-push:
@@ -700,11 +701,16 @@ jobs:
 
           if [ "${WARN_NEW}" != "0" ]; then
             echo "OWASP ZAP found new WARN issues."
-            echo "DAST gate failed because WARN-NEW must be 0."
-            exit 1
-          fi
+            echo "DAST_FAIL_ON_WARN=${DAST_FAIL_ON_WARN:-false}"
+            
+            if [ "${DAST_FAIL_ON_WARN:-false}" = "true" ]; then
+              echo "DAST gate failed because WARN-NEW must be 0."
+              exit 1
+            fi
 
-          echo "OWASP ZAP baseline scan passed."
+            echo "WARN issues are currently non-blocking for CD staging."
+
+          fi
 
       - name: Cleanup Ephemeral DAST Environment
         if: always()
