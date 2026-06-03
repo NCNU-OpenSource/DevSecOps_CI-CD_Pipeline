@@ -601,14 +601,20 @@ jobs:
                     args:
                       - |
                         set +e
+                        cd /zap/wrk
+
                         zap-baseline.py \
                           -t "${DAST_TARGET_URL}" \
                           -J zap-report.json \
                           -r zap-report.html \
                           -w zap-report.md \
                           -I
+
                         ZAP_STATUS=\$?
-                        echo "\${ZAP_STATUS}" > /zap/wrk/zap-exit-code
+                        echo "\${ZAP_STATUS}" > /zap/wrk/zap-exit-code.txt
+                        echo "ZAP scan finished with exit code: \${ZAP_STATUS}"
+                        echo "Keeping container alive for artifact copy..."
+                        sleep 300
                         exit 0
                     volumeMounts:
                       - name: zap-work
@@ -618,19 +624,45 @@ jobs:
                     emptyDir: {}
           EOF
 
-          echo "Waiting for ZAP job to finish..."
+          echo "Waiting for ZAP pod to be running..."
 
-          kubectl wait \
-            --for=condition=complete \
-            job/${ZAP_JOB} \
-            -n "${DAST_NAMESPACE}" \
-            --timeout=600s
+          ZAP_POD=""
+          for i in $(seq 1 60); do
+            ZAP_POD="$(kubectl get pod -n "${DAST_NAMESPACE}" \
+              -l job-name="${ZAP_JOB}" \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
 
-          ZAP_POD="$(kubectl get pod -n "${DAST_NAMESPACE}" \
-            -l job-name="${ZAP_JOB}" \
-            -o jsonpath='{.items[0].metadata.name}')"
+            if [ -n "${ZAP_POD}" ]; then
+              PHASE="$(kubectl get pod -n "${DAST_NAMESPACE}" "${ZAP_POD}" -o jsonpath='{.status.phase}')"
+              echo "ZAP pod phase: ${PHASE}"
+
+              if [ "${PHASE}" = "Running" ]; then
+                break
+              fi
+            fi
+
+            sleep 5
+          done
+
+          if [ -z "${ZAP_POD}" ]; then
+            echo "Failed to find ZAP pod."
+            kubectl get pods -n "${DAST_NAMESPACE}" -o wide
+            exit 1
+          fi
 
           echo "ZAP pod: ${ZAP_POD}"
+
+          echo "Waiting for ZAP scan output files..."
+
+          for i in $(seq 1 120); do
+            if kubectl exec -n "${DAST_NAMESPACE}" "${ZAP_POD}" -- test -f /zap/wrk/zap-exit-code.txt; then
+              echo "ZAP scan completed."
+              break
+            fi
+
+            echo "ZAP scan still running... ${i}"
+            sleep 5
+          done
 
           kubectl logs -n "${DAST_NAMESPACE}" "${ZAP_POD}" | tee zap-console.log
 
@@ -647,7 +679,7 @@ jobs:
             "zap-report-${SHORT_SHA}.md" || true
 
           kubectl cp \
-            "${DAST_NAMESPACE}/${ZAP_POD}:/zap/wrk/zap-exit-code" \
+            "${DAST_NAMESPACE}/${ZAP_POD}:/zap/wrk/zap-exit-code.txt" \
             "zap-exit-code-${SHORT_SHA}.txt" || true
 
           ls -lh zap-report-${SHORT_SHA}.* zap-console.log zap-exit-code-${SHORT_SHA}.txt || true
