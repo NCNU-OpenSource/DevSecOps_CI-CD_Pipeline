@@ -1,0 +1,318 @@
+name: CD Production
+
+on:
+  workflow_run:
+    workflows:
+      - CD Staging
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: cd-production-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: harbor.jlsa.local:30443
+  IMAGE_NAME: ci/youtube-music-bot
+  APP_NAME: youtube-music-bot
+  APP_PORT: "3000"
+
+  STAGING_NAMESPACE: staging-youtube-music-bot
+  PRODUCTION_NAMESPACE: production-youtube-music-bot
+  PRODUCTION_NODE_PORT: "31080"
+
+jobs:
+  deploy-production:
+    name: Deploy to VM3 Production
+    runs-on: arc-runner-set
+    timeout-minutes: 20
+    environment: production
+
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install kubectl
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/bin"
+
+          KUBECTL_VERSION="v1.30.14"
+
+          echo "Installing kubectl ${KUBECTL_VERSION}"
+
+          curl -L --fail --retry 3 \
+            -o "$RUNNER_TEMP/bin/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+
+          chmod +x "$RUNNER_TEMP/bin/kubectl"
+
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+          "$RUNNER_TEMP/bin/kubectl" version --client
+
+      - name: Configure Kubernetes Auth
+        env:
+          K8S_KUBECONFIG_B64: ${{ secrets.K8S_KUBECONFIG_B64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${K8S_KUBECONFIG_B64:-}" ]; then
+            echo "K8S_KUBECONFIG_B64 is empty."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/kube"
+
+          printf "%s" "$K8S_KUBECONFIG_B64" \
+            | base64 -d > "$RUNNER_TEMP/kube/config"
+
+          chmod 600 "$RUNNER_TEMP/kube/config"
+
+          echo "KUBECONFIG=$RUNNER_TEMP/kube/config" >> "$GITHUB_ENV"
+          export KUBECONFIG="$RUNNER_TEMP/kube/config"
+
+          echo "Testing Kubernetes API access..."
+          kubectl get --raw=/version
+
+          echo "Current context:"
+          kubectl config current-context
+
+      - name: Check VM3 Node Label
+        run: |
+          set -euo pipefail
+
+          echo "Checking node3 labels..."
+          kubectl get node node3 --show-labels
+
+          NODE3_DEDICATED="$(kubectl get node node3 -o jsonpath='{.metadata.labels.dedicated}')"
+
+          if [ "${NODE3_DEDICATED}" != "production-storage" ]; then
+            echo "node3 does not have label dedicated=production-storage"
+            exit 1
+          fi
+
+          echo "node3 label OK: dedicated=production-storage"
+
+      - name: Resolve Image Digest from Staging
+        run: |
+          set -euo pipefail
+
+          echo "Reading image digest from staging deployment..."
+
+          kubectl get deployment "${APP_NAME}" \
+            -n "${STAGING_NAMESPACE}" \
+            -o yaml
+
+          IMAGE_DIGEST="$(kubectl get deployment "${APP_NAME}" \
+            -n "${STAGING_NAMESPACE}" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')"
+
+          if [ -z "${IMAGE_DIGEST}" ]; then
+            echo "Failed to resolve IMAGE_DIGEST from staging deployment."
+            exit 1
+          fi
+
+          case "${IMAGE_DIGEST}" in
+            ${REGISTRY}/${IMAGE_NAME}@sha256:*)
+              echo "Image digest format OK."
+              ;;
+            *)
+              echo "Production must deploy by digest, not tag."
+              echo "IMAGE_DIGEST=${IMAGE_DIGEST}"
+              exit 1
+              ;;
+          esac
+
+          echo "IMAGE_DIGEST=${IMAGE_DIGEST}" >> "$GITHUB_ENV"
+
+          echo "Production will deploy the same image as staging:"
+          echo "${IMAGE_DIGEST}"
+
+      - name: Check NodePort Availability
+        run: |
+          set -euo pipefail
+
+          echo "Checking whether NodePort ${PRODUCTION_NODE_PORT} is already used..."
+
+          USED_BY="$(kubectl get svc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{range .spec.ports[*]}{.nodePort}{" "}{end}{"\n"}{end}' \
+            | awk -v port="${PRODUCTION_NODE_PORT}" '$0 ~ port {print $1 "/" $2}' || true)"
+
+          if [ -n "${USED_BY}" ]; then
+            echo "NodePort ${PRODUCTION_NODE_PORT} is used by:"
+            echo "${USED_BY}"
+
+            if echo "${USED_BY}" | grep -qx "${PRODUCTION_NAMESPACE}/${APP_NAME}"; then
+              echo "NodePort is already used by the same production service. OK."
+            else
+              echo "NodePort ${PRODUCTION_NODE_PORT} is used by another service."
+              exit 1
+            fi
+          else
+            echo "NodePort ${PRODUCTION_NODE_PORT} is available."
+          fi
+
+      - name: Deploy Production to VM3
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${HARBOR_USERNAME:-}" ] || [ -z "${HARBOR_PASSWORD:-}" ]; then
+            echo "HARBOR_USERNAME or HARBOR_PASSWORD is empty."
+            exit 1
+          fi
+
+          echo "Deploying image to VM3 production:"
+          echo "${IMAGE_DIGEST}"
+
+          kubectl create namespace "${PRODUCTION_NAMESPACE}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl create secret docker-registry harbor-registry-secret \
+            -n "${PRODUCTION_NAMESPACE}" \
+            --docker-server="${REGISTRY}" \
+            --docker-username="${HARBOR_USERNAME}" \
+            --docker-password="${HARBOR_PASSWORD}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          cat << EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${APP_NAME}
+            namespace: ${PRODUCTION_NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: production
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: ${APP_NAME}
+            template:
+              metadata:
+                labels:
+                  app: ${APP_NAME}
+                  environment: production
+                annotations:
+                  jlsa.dev/image-digest: "${IMAGE_DIGEST}"
+              spec:
+                nodeSelector:
+                  dedicated: production-storage
+                imagePullSecrets:
+                  - name: harbor-registry-secret
+                containers:
+                  - name: app
+                    image: ${IMAGE_DIGEST}
+                    ports:
+                      - containerPort: ${APP_PORT}
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: ${APP_PORT}
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                      failureThreshold: 6
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: ${APP_PORT}
+                      initialDelaySeconds: 20
+                      periodSeconds: 20
+                      failureThreshold: 3
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${APP_NAME}
+            namespace: ${PRODUCTION_NAMESPACE}
+            labels:
+              app: ${APP_NAME}
+              environment: production
+          spec:
+            type: NodePort
+            selector:
+              app: ${APP_NAME}
+            ports:
+              - name: http
+                port: ${APP_PORT}
+                targetPort: ${APP_PORT}
+                nodePort: ${PRODUCTION_NODE_PORT}
+          EOF
+
+          kubectl rollout status deployment/${APP_NAME} \
+            -n "${PRODUCTION_NAMESPACE}" \
+            --timeout=180s
+
+          echo "Production resources:"
+          kubectl get pods -n "${PRODUCTION_NAMESPACE}" -o wide
+          kubectl get svc -n "${PRODUCTION_NAMESPACE}"
+
+      - name: Verify Production Pod Runs on VM3
+        run: |
+          set -euo pipefail
+
+          POD_NODE="$(kubectl get pod -n "${PRODUCTION_NAMESPACE}" \
+            -l app="${APP_NAME}" \
+            -o jsonpath='{.items[0].spec.nodeName}')"
+
+          echo "Production pod node: ${POD_NODE}"
+
+          if [ "${POD_NODE}" != "node3" ]; then
+            echo "Production pod is not running on node3."
+            exit 1
+          fi
+
+          echo "Production pod is running on VM3/node3."
+
+      - name: Smoke Test Production
+        run: |
+          set -euo pipefail
+
+          PRODUCTION_CLUSTER_URL="http://${APP_NAME}.${PRODUCTION_NAMESPACE}.svc.cluster.local:${APP_PORT}"
+
+          echo "Testing production service inside cluster:"
+          echo "${PRODUCTION_CLUSTER_URL}"
+
+          for i in $(seq 1 30); do
+            if curl -fsS "${PRODUCTION_CLUSTER_URL}" > /tmp/production-response.html; then
+              echo "Production cluster smoke test passed."
+              head -20 /tmp/production-response.html || true
+              exit 0
+            fi
+
+            echo "Waiting for production service... ${i}"
+            sleep 5
+          done
+
+          echo "Production smoke test failed."
+          kubectl get pods -n "${PRODUCTION_NAMESPACE}" -o wide
+          kubectl describe deployment "${APP_NAME}" -n "${PRODUCTION_NAMESPACE}"
+          exit 1
+
+      - name: Write Production Summary
+        if: always()
+        run: |
+          echo "## CD Production Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Namespace | \`${PRODUCTION_NAMESPACE}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| App | \`${APP_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image Digest | \`${IMAGE_DIGEST:-not-resolved}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Node Selector | \`dedicated=production-storage\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Expected Node | \`node3\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Cluster URL | \`http://${APP_NAME}.${PRODUCTION_NAMESPACE}.svc.cluster.local:${APP_PORT}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| NodePort | \`${PRODUCTION_NODE_PORT}\` |" >> "$GITHUB_STEP_SUMMARY"
