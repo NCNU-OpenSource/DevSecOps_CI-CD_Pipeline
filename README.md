@@ -26,7 +26,7 @@
 
 | Repo | 用途 | 連結 |
 |------|------|------|
-| `DevSecOps_CI-CD_Pipeline` | 放你的專案原始碼，並執行 CI/CD workflow，例如程式檢查、安全掃描、Image 建置與部署流程| [範例](https://github.com/Julie08080808/DevSecOps_CI-CD_Pipeline) |
+| `DevSecOps_CI-CD_Pipeline` | 放你的專案原始碼，並執行 CI/CD workflow，例如程式檢查、安全掃描、Image 建置與部署流程| [範例](https://github.com/NCNU-OpenSource/DevSecOps_CI-CD_Pipeline) |
 | `infra` | 負責建立與管理 Kubernetes 及 CI/CD Pipeline 所需的工具，例如 Terraform modules、自訂 Runner Image、BuildKit Dockerfile、Harbor 憑證與 Kubernetes manifests | [範例](https://github.com/Julie08080808/infra) |
 | `youtube-music-bot-gitops` | 記錄 Kubernetes staging / production 目前需要部署哪個版本，例如 image digest、Deployment、Service 與環境設定| [範例](https://github.com/Julie08080808/youtube-music-bot-gitops) |
 
