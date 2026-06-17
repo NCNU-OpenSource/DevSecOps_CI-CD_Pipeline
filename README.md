@@ -172,7 +172,8 @@ nodeSelector:
 <br>
 <br>
 
-<img width="1191" height="2303" alt="CI_CD" src="https://github.com/user-attachments/assets/6bbdd624-97a4-4ab4-87d4-44cd68a8467d" />
+<img width="1191" height="2303" alt="DevSecOps_CI_CD pipeline" src="https://github.com/user-attachments/assets/fe285d07-e365-456a-ac06-421e1b8b450a" />
+
 
 <br>
 
