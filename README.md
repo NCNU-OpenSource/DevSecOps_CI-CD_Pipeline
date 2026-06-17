@@ -107,6 +107,45 @@ Argo CD         → 讓 cluster live state 追上 GitOps desired state
 | VM3 | Production Worker | 32GB | 4 cores | 50GB |
 
 > VM2 需要最多資源，因為每個 Kata MicroVM 約需要 4-8GB 記憶體，多個平行 job 會等比例增加記憶體需求。
+<details>
+ <summary>Job 實際運行的位置</summary>
+ <br>
+ 這個 pipeline 的 CI job <b>不會跑在 GitHub 的雲端伺服器上</b>，而是跑在你自己 K8s 叢集裡指定的 <b> CI Worker node</b>（在我們的環境裡是 VM2 / node2）。  
+
+---
+ 
+**運作方式**
+ 
+```
+GitHub 收到 push / PR 事件
+    ↓
+ARC（Actions Runner Controller）監聽到有新 job
+    ↓
+ARC 在 K8s 叢集裡動態建立一個 EphemeralRunner Pod
+    ↓
+這個 Pod 被排程到貼有 dedicated=ci-security 標籤的 node（VM2）
+    ↓
+Pod 用 runtimeClassName: kata，所以實際上是在
+Kata MicroVM 裡執行（獨立的 Linux kernel，跟 VM2 host 完全隔離）
+    ↓
+CI job 執行完成
+    ↓
+Pod 自動銷毀，不留任何狀態
+```
+ 
+---
+ 
+**為什麼 job 會固定跑在 VM2**
+ 
+ARC 的 RunnerScaleSet 設定了 `nodeSelector`：
+ 
+```yaml
+nodeSelector:
+  dedicated: ci-security
+```
+ 
+只有貼上 `dedicated=ci-security` 這個 label 的 node，才會被 K8s 排程器選中來跑 Runner Pod。在我們的叢集裡，只有 VM2 有這個 label，所以所有 CI job 都會跑在 VM2 上，不會跑到 VM1（control plane）或 VM3（production）。
+</details>
 
 ### 軟體需求
 
@@ -129,10 +168,13 @@ Argo CD         → 讓 cluster live state 追上 GitOps desired state
 | Harbor | 自架，不需外部帳號 | 免費 |
 
 ### DevSecOps CI/CD Pipeline 架構
+**CI 靜態分析只在 PR 階段執行，push main 後不會重複跑。**  
+<br>
+<br>
 
-**CI 靜態分析只在 PR 階段執行，push main 後不會重複跑。**
-<img width="1191" height="2303" alt="CI_CD pipeline" src="https://github.com/user-attachments/assets/265b25ca-26ff-4a2c-b00f-7cb8b3688d78" />
+<img width="1191" height="2303" alt="CI_CD" src="https://github.com/user-attachments/assets/6bbdd624-97a4-4ab4-87d4-44cd68a8467d" />
 
+<br>
 
 
 ## Existing Library / Software
@@ -390,10 +432,39 @@ youtube-music-bot-production   Synced   Healthy
 ---
 
 ## Knowledge from Lecture
+### SDLC (Software Development Life Cycle) 軟體開發生命週期 
+一套結構化的方法，用來規劃、設計、開發、測試、部署與維護軟體。核心精神是：透過明確的流程，確保軟體品質、降低風險、控制成本，並交付符合使用者需求的產品。
+
+### DevSecOps
+傳統 DevOps 強調快速交付跟持續迭代，安全性檢測往往放在最後才檢查。但隨著供應鏈攻擊、雲端環境、容器化越普遍風險越高，所以有了 DevSecOps 的概念，把安全左移 ( Shift Left Security ) 嵌入在 DevOps 每一階段。
+- Dev（Development）：規劃、寫程式、建置與測試程式。
+- Sec（Security）：在每個階段加入安全檢查與防護，例如程式碼分析、漏洞掃描。
+- Ops（Operations）：部署、監控與維護系統，確保穩定運行並持續修補安全問題。
 
 ### Shift Left Security
 
 把安全測試提前到開發流程的最早期。越早發現問題，修復成本越低。每個 PR 都自動跑 SAST、Dependency scan、License scan、DAST。
+
+### CI/CD 
+CI/CD 是一種現代開發時常見的概念流程，透過自動化的方式，可以讓碼程式碼從提交到上線的每個環節，一直自動整合、自動建置、自動測試、自動交付與部屬，大大降低人力成本與維持品質。
+
+- CI ( Continuous Integration ) 持續整合: 開發者如果有將新程式碼 push 到分支或 main 上，會自動開始 build 環境和 test，確保功能與環境沒有問題，才會進行 merge。
+- CD ( Continuous Delivery/Deployment ) 持續交付/部署
+   -  CD (Continuous Delivery) 持續交付:  整合完後的版本，要真的確定此版本可以被部屬，會先再次進行測試 (包含: 整合測試、端對端測試)。接著將版本部署到 staging 環境 (模擬正式生產環境)，做最後的驗證。最後經由人工手動部屬到生產 (production) 環境。
+   -  CD (Continuous Deployment) 持續部屬: 和自動交付一樣，會先進行部屬前的測試。以自動的方式，將通過測試的版本持續部屬到生產環境中。
+
+### SAST ( Static Application Security Testing ) 靜態應用程式安全測試
+SAST 是一種在不執行程式碼的情況下，直接對靜態的原始碼、位元組碼或二進位檔進行掃描，逐行比對並分析程式碼的結構，找出潛在的安全弱點與漏洞，揪出開發人員在撰寫程式時留下的錯誤。也被稱為一種靜態的白箱測試。
+
+### SCA ( Software composition analysis ) 軟體組成分析
+用來檢查專案中第三方套件、開源元件、相依套件的工具，透過建立 SBOM 來避免供應鏈攻擊、防範已知漏洞。
+
+### SBOM（軟體元件清單）
+
+列出 Container Image 裡所有套件、版本、License，方便追蹤供應鏈風險。使用 Syft 產生 SBOM，再用 Grype 掃描 CVE。
+
+### DAST ( Dynamic Application Security Testing )
+在系統實際運行的情況下，透過模擬外部攻擊 ( 可能像是: SQL Injection、XSS )，來攔截、分析與紀錄你的系統哪裡有漏洞。常見可檢查的問題包含 SQL Injection、XSS、HTTP Header 設定不安全、Cookie 安全屬性缺失、錯誤訊息洩漏等。
 
 ### Defense in Depth
 
@@ -434,9 +505,6 @@ Kyverno Admission Policy
 - Production 只接受 staging 已驗證過的 digest
 - Kyverno 驗證每個 Pod 的 Cosign 簽章（待修改逐步收緊中）
 
-### SBOM（軟體元件清單）
-
-列出 Container Image 裡所有套件、版本、License，方便追蹤供應鏈風險。使用 Syft 產生 SBOM，再用 Grype 掃描 CVE。
 
 ---
 
@@ -1084,8 +1152,8 @@ curl http://YOUR_VM3_IP:31080
 
 |學號|名字|工作內容|
 |---|----|------|
-|112213061|陳章銓||
-|112213065|張詠筑||
+|112213061|陳章銓|CI/CD pipeline 的實作、Kubernetes 的環境建置、readme 撰寫、上台報告|
+|112213065|張詠筑|CI/CD pipeline 的實作、readme 撰寫、上台報告|
 
 ### 感謝名單
 - MoLi 的 server
@@ -1126,16 +1194,3 @@ curl http://YOUR_VM3_IP:31080
 - [Kata Containers Architecture](https://katacontainers.io/learn/)
 - [Kustomize Documentation](https://kustomize.io/)
 
-
-### 還可以再修正的地方
-
-| 項目 | 現況 | 目標 |
-|------|------|------|
-| FOSSA | analyze-only bootstrap | run-tests: true，正式 PR gate |
-| Biome | report only | 修完問題後改為 blocking |
-| Hadolint | report only | 修完 Dockerfile 後改為 blocking |
-| PR DAST WARN | 不擋 | 修完 security headers 後改為 blocking |
-| Main Build DAST WARN | 不擋 | 之後改為 blocking |
-| Kyverno | audit / warn | Enforce（未簽章 image 不准部署） |
-| Branch Protection | 部分完成 | 逐步加入 required checks |
-| Monitoring | 未完成 | Prometheus + Grafana + Loki |
